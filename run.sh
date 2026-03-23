@@ -130,7 +130,7 @@ cmd_stop() {
 cmd_status() {
     header "Process Status"
     if is_running "$DASHBOARD_PID"; then
-        ok "Dashboard:  running (PID $(cat "$DASHBOARD_PID")) → http://localhost:$DASHBOARD_PORT"
+        ok "Dashboard:  running (PID $(cat "$DASHBOARD_PID")) → \e]8;;http://localhost:$DASHBOARD_PORT\e\\http://localhost:$DASHBOARD_PORT\e]8;;\e\\"
     else
         warn "Dashboard:  not running"
     fi
@@ -181,7 +181,7 @@ cmd_dashboard() {
     echo $! > "$DASHBOARD_PID"
 
     if wait_for_port; then
-        ok "Dashboard running → http://localhost:$DASHBOARD_PORT"
+        ok "Dashboard running → \e]8;;http://localhost:$DASHBOARD_PORT\e\\http://localhost:$DASHBOARD_PORT\e]8;;\e\\"
     else
         warn "Dashboard may still be starting — check $DASHBOARD_LOG"
     fi
@@ -236,13 +236,13 @@ cmd_start() {
     echo ""
     header "All systems running!"
     echo ""
-    echo -e "  ${GREEN}Dashboard${NC}:    http://localhost:$DASHBOARD_PORT"
+    echo -e "  ${GREEN}Dashboard${NC}:    \e]8;;http://localhost:$DASHBOARD_PORT\e\\${CYAN}http://localhost:$DASHBOARD_PORT${NC}\e]8;;\e\\"
     echo -e "  ${GREEN}Sim Logs${NC}:     tail -f $SIMULATION_LOG"
     echo -e "  ${GREEN}Dash Logs${NC}:    tail -f $DASHBOARD_LOG"
     echo -e "  ${GREEN}Stop${NC}:         ./run.sh stop"
     echo -e "  ${GREEN}Status${NC}:       ./run.sh status"
     echo ""
-    info "Open the dashboard in your browser and watch the Logs tab for live progress."
+    info "Click the link above or open http://localhost:$DASHBOARD_PORT"
     info "The simulation will take ~60-90 min for 30 days."
 }
 

@@ -131,7 +131,7 @@ SUPPRESSION_RATE = 0.08      # General suppression (recent contact, etc.)
 # ---------------------------------------------------------------------------
 # Historical Activity Generation
 # ---------------------------------------------------------------------------
-HISTORICAL_RECORDS = 50000
+HISTORICAL_RECORDS = 200000
 HISTORICAL_DATE_RANGE = ("2024-01-01", "2025-06-30")
 
 # Behavioral policy channel preferences (what the business has been doing)
