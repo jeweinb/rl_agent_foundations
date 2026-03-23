@@ -8,7 +8,7 @@ import json
 
 from config import (
     HEDIS_MEASURES, CHANNELS, ACTION_CATALOG, NUM_ACTIONS,
-    ACTION_BY_ID, MEASURE_WEIGHTS, TRIPLE_WEIGHTED,
+    ACTION_BY_ID, MEASURE_WEIGHTS,
 )
 from datagen.constants import (
     AGE_RANGE, BP_SYSTOLIC, BP_DIASTOLIC, A1C, BMI, PHQ9,
@@ -418,15 +418,15 @@ class TestActionCatalog:
         channels_in_catalog = {a.channel for a in ACTION_CATALOG if a.channel != "none"}
         assert channels_in_catalog == set(CHANNELS)
 
-    def test_triple_weighted_measures_correct(self):
-        assert TRIPLE_WEIGHTED == {"MAC", "MRA", "MDS", "DMC02", "TRC_M"}
-        for m in TRIPLE_WEIGHTED:
-            assert MEASURE_WEIGHTS[m] == 3.0
+    def test_outcome_measures_weight_3(self):
+        weight_3_measures = {"BCS", "EED", "CBP", "BPD", "HBD", "MAC", "MRA", "MDS", "DMC02"}
+        for m in weight_3_measures:
+            assert MEASURE_WEIGHTS[m] == 3, f"{m} should be weight 3, got {MEASURE_WEIGHTS[m]}"
 
-    def test_single_weighted_measures(self):
-        for m in HEDIS_MEASURES:
-            if m not in TRIPLE_WEIGHTED:
-                assert MEASURE_WEIGHTS[m] == 1.0
+    def test_process_measures_weight_1(self):
+        weight_1_measures = {"COL", "FVA", "FVO", "AIS", "FLU", "KED", "DSF", "DRR", "TRC_M"}
+        for m in weight_1_measures:
+            assert MEASURE_WEIGHTS[m] == 1, f"{m} should be weight 1, got {MEASURE_WEIGHTS[m]}"
 
     def test_action_descriptions_non_empty(self):
         for a in ACTION_CATALOG:

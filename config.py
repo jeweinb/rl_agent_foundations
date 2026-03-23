@@ -26,9 +26,57 @@ MEASURE_CATEGORIES = {
     "care_coordination": ["TRC_M"],
 }
 
-TRIPLE_WEIGHTED: Set[str] = {"MAC", "MRA", "MDS", "DMC02", "TRC_M"}
+# CMS 2026 Star Ratings measure weights
+# Based on CMS measure categorization:
+#   Outcome/Intermediate Outcome = 3
+#   Patient experience/access = 2 (reduced from 4)
+#   Process/New measures = 1
+# Note: MAC, MRA, MDS are Part D measures, temporarily weight 1 for 2026,
+#       returning to weight 3 in 2027+. We model them at weight 3 for
+#       forward-looking FY2028 (MY2025-2026) optimization.
 MEASURE_WEIGHTS: Dict[str, float] = {
-    m: (3.0 if m in TRIPLE_WEIGHTED else 1.0) for m in HEDIS_MEASURES
+    "COL": 1,     # Process (new specifications for 2026)
+    "BCS": 3,     # Outcome
+    "EED": 3,     # Outcome (retiring 2029)
+    "FVA": 1,     # Process
+    "FVO": 1,     # Process
+    "AIS": 1,     # Process
+    "FLU": 1,     # Process
+    "CBP": 3,     # Intermediate Outcome
+    "BPD": 3,     # Intermediate Outcome
+    "HBD": 3,     # Intermediate Outcome
+    "KED": 1,     # New measure for 2026
+    "MAC": 3,     # Part D Intermediate Outcome (weight 1 in 2026, 3 in 2027+)
+    "MRA": 3,     # Part D Intermediate Outcome (weight 1 in 2026, 3 in 2027+)
+    "MDS": 3,     # Part D Intermediate Outcome (weight 1 in 2026, 3 in 2027+)
+    "DSF": 1,     # Process
+    "DRR": 1,     # Outcome (new)
+    "DMC02": 3,   # Intermediate Outcome
+    "TRC_M": 1,   # Process
+}
+
+# CMS Star Rating cut points — thresholds for each star level per measure
+# Based on 2026 Star Ratings cut points (approximate, from CMS published data)
+# Format: {measure: {2: threshold, 3: threshold, 4: threshold, 5: threshold}}
+MEASURE_CUT_POINTS: Dict[str, Dict[int, float]] = {
+    "COL": {2: 0.50, 3: 0.60, 4: 0.70, 5: 0.78},
+    "BCS": {2: 0.60, 3: 0.70, 4: 0.78, 5: 0.84},
+    "EED": {2: 0.55, 3: 0.65, 4: 0.75, 5: 0.86},
+    "FVA": {2: 0.30, 3: 0.45, 4: 0.55, 5: 0.65},
+    "FVO": {2: 0.40, 3: 0.55, 4: 0.65, 5: 0.75},
+    "AIS": {2: 0.25, 3: 0.35, 4: 0.45, 5: 0.55},
+    "FLU": {2: 0.55, 3: 0.65, 4: 0.73, 5: 0.80},
+    "CBP": {2: 0.55, 3: 0.65, 4: 0.78, 5: 0.86},
+    "BPD": {2: 0.50, 3: 0.60, 4: 0.72, 5: 0.82},
+    "HBD": {2: 0.65, 3: 0.75, 4: 0.84, 5: 0.91},
+    "KED": {2: 0.35, 3: 0.48, 4: 0.62, 5: 0.74},
+    "MAC": {2: 0.78, 3: 0.84, 4: 0.89, 5: 0.93},
+    "MRA": {2: 0.78, 3: 0.84, 4: 0.89, 5: 0.93},
+    "MDS": {2: 0.76, 3: 0.82, 4: 0.87, 5: 0.92},
+    "DSF": {2: 0.40, 3: 0.55, 4: 0.65, 5: 0.75},
+    "DRR": {2: 0.20, 3: 0.30, 4: 0.40, 5: 0.50},
+    "DMC02": {2: 0.45, 3: 0.55, 4: 0.65, 5: 0.75},
+    "TRC_M": {2: 0.35, 3: 0.50, 4: 0.60, 5: 0.72},
 }
 
 MEASURE_DESCRIPTIONS = {
@@ -208,13 +256,13 @@ BUDGET_REPLENISH_INTERVAL_DAYS = 90   # Quarterly replenishment
 REWARD_WEIGHTS = {
     "gap_closure": 1.0,
     "engagement_deliver": 0.05,
-    "engagement_click": 0.1,
-    "action_cost": -0.01,
-    "fatigue": -0.05,
+    "engagement_click": 0.15,
+    "action_cost": -0.005,
+    "fatigue": -0.03,
     # Budget conservation rewards
-    "budget_conservation": 0.02,      # Small reward for choosing no_action when budget is low
-    "budget_waste": -0.08,            # Penalty for sending low-value messages when budget < 25%
-    "budget_critical_penalty": -0.15, # Harsh penalty for any message when budget < 10%
+    "budget_conservation": 0.01,      # Small reward for choosing no_action when budget is low
+    "budget_waste": -0.04,            # Penalty for sending low-value messages when budget < 25%
+    "budget_critical_penalty": -0.10, # Harsh penalty for any message when budget < 10%
 }
 
 # ---------------------------------------------------------------------------
@@ -231,13 +279,15 @@ CQL_CONFIG = {
 # ---------------------------------------------------------------------------
 # Lag Distributions (days) per measure category
 # ---------------------------------------------------------------------------
+# Lag distributions for the simulation (calibrated so most rewards resolve
+# within a 30-day sim window). In production these would be longer.
 LAG_DISTRIBUTIONS = {
-    "screenings": {"min": 14, "max": 60, "mean": 30},
-    "vaccines": {"min": 1, "max": 14, "mean": 5},
-    "chronic": {"min": 7, "max": 45, "mean": 21},
-    "medication_adherence": {"min": 30, "max": 90, "mean": 60},
-    "mental_health": {"min": 14, "max": 60, "mean": 30},
-    "care_coordination": {"min": 3, "max": 30, "mean": 14},
+    "screenings": {"min": 3, "max": 14, "mean": 7},
+    "vaccines": {"min": 1, "max": 5, "mean": 2},
+    "chronic": {"min": 2, "max": 10, "mean": 5},
+    "medication_adherence": {"min": 3, "max": 12, "mean": 7},
+    "mental_health": {"min": 3, "max": 14, "mean": 7},
+    "care_coordination": {"min": 1, "max": 7, "mean": 3},
 }
 
 # ---------------------------------------------------------------------------

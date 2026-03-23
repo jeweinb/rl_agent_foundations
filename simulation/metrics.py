@@ -6,7 +6,7 @@ import numpy as np
 from typing import Dict, List, Any
 
 from config import HEDIS_MEASURES, MEASURE_WEIGHTS, STARS_BONUS_THRESHOLD
-from environment.reward import compute_stars_score
+from environment.reward import compute_stars_score, get_measure_stars_detail
 
 
 class MetricsTracker:
@@ -53,6 +53,7 @@ class MetricsTracker:
             closure_rates[m] = min(closed / max(total, 1), 1.0)
 
         stars_score = compute_stars_score(closure_rates)
+        measure_detail = get_measure_stars_detail(closure_rates)
 
         metrics = {
             "day": day,
@@ -63,6 +64,7 @@ class MetricsTracker:
             "stars_score": stars_score,
             "above_bonus_threshold": stars_score >= STARS_BONUS_THRESHOLD,
             "measure_closure_rates": closure_rates,
+            "measure_detail": measure_detail,
             "champion_score": champion_score,
             "challenger_score": challenger_score,
             "model_promoted": model_promoted,

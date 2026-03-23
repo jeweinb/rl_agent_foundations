@@ -157,24 +157,31 @@ def run_daily_cycle(
             signals = state_machine.get_engagement_signals(tracking_id)
 
             # Schedule potential lagged reward
-            # Closure probability is based on measure base rate + channel lift
-            # Engagement signals improve probability but action itself has baseline value
-            from datagen.constants import GAP_CLOSURE_BASE_RATES, OUTREACH_LIFT
+            # Mirrors the same patterns as historical data:
+            # best channel → higher closure, engagement → higher closure
+            from datagen.constants import GAP_CLOSURE_BASE_RATES
+            from datagen.historical_activity import BEST_CHANNEL_BY_CATEGORY, _get_category
             base_rate = GAP_CLOSURE_BASE_RATES.get(action_info.measure, 0.5)
-            lift = OUTREACH_LIFT.get(action_info.channel, 1.0)
-            # Per-interaction closure probability (annualized rate / ~30 interactions per year)
-            closure_prob = base_rate * lift * 0.08
+            category = _get_category(action_info.measure)
+            best_ch = BEST_CHANNEL_BY_CATEGORY.get(category, "sms")
+
+            # Channel-measure match factor
+            ch_factor = 1.8 if action_info.channel == best_ch else 1.0
+
+            closure_prob = base_rate * 0.15 * ch_factor
             if signals.get("clicked"):
                 closure_prob *= 3.0
             elif signals.get("opened"):
                 closure_prob *= 1.5
+            elif signals.get("delivered"):
+                closure_prob *= 1.1
 
             lagged_queue.schedule(
                 current_day=day,
                 patient_id=pid,
                 measure=action_info.measure,
                 action_id=action_id,
-                closure_prob=min(closure_prob, 0.5),
+                closure_prob=min(closure_prob, 0.6),
             )
 
             # Compute immediate reward (budget-aware)
@@ -228,8 +235,21 @@ def run_daily_cycle(
             "patient_id": pid,
         })
 
-    # Advance all pending actions in state machine
+    # Advance all pending actions in state machine (one transition per day)
     state_machine.advance_all(day)
+
+    # Update action records with latest engagement signals from state machine
+    # (actions created today were only at QUEUED when signals were first captured;
+    #  now after advance_all they may be at PRESENTED/VIEWED/etc.)
+    for action_record in daily_actions:
+        if action_record["action_id"] == 0:
+            continue
+        pid = action_record["patient_id"]
+        aid = action_record["action_id"]
+        tracking_id = f"day{day:02d}_{pid}_{aid}"
+        updated_signals = state_machine.get_engagement_signals(tracking_id)
+        if updated_signals.get("delivered") or updated_signals.get("opened"):
+            action_record["engagement"] = updated_signals
 
     # Process lagged rewards arriving today
     resolved = lagged_queue.collect(day)

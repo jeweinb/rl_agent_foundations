@@ -99,48 +99,96 @@ def compute_reward(
     return reward
 
 
+def measure_rate_to_stars(measure: str, rate: float) -> float:
+    """Convert a single measure's performance rate to its individual star rating.
+
+    Uses CMS cut points: each measure has specific thresholds for 2-5 stars.
+    Below the 2-star cut point = 1 star.
+
+    Args:
+        measure: HEDIS measure code.
+        rate: Performance rate (0-1).
+
+    Returns:
+        Individual measure star rating (1.0-5.0).
+    """
+    from config import MEASURE_CUT_POINTS
+    cuts = MEASURE_CUT_POINTS.get(measure)
+    if not cuts:
+        # Fallback for unknown measures
+        if rate >= 0.80: return 5.0
+        if rate >= 0.65: return 4.0
+        if rate >= 0.50: return 3.0
+        if rate >= 0.35: return 2.0
+        return 1.0
+
+    if rate >= cuts[5]:
+        return 5.0
+    elif rate >= cuts[4]:
+        # Interpolate between 4 and 5
+        return 4.0 + (rate - cuts[4]) / max(cuts[5] - cuts[4], 0.01)
+    elif rate >= cuts[3]:
+        return 3.0 + (rate - cuts[3]) / max(cuts[4] - cuts[3], 0.01)
+    elif rate >= cuts[2]:
+        return 2.0 + (rate - cuts[2]) / max(cuts[3] - cuts[2], 0.01)
+    else:
+        return 1.0 + min(rate / max(cuts[2], 0.01), 1.0)
+
+
 def compute_stars_score(
     measure_closure_rates: dict,
     measure_weights: dict = None,
 ) -> float:
-    """Compute an approximate STARS score from measure-level gap closure rates.
+    """Compute the overall STARS score using CMS methodology.
 
-    This is a simplified version of the CMS STARS calculation.
-    Maps weighted average closure rate to a 1-5 star scale.
+    CMS methodology (2-step process):
+    1. Each measure's performance rate is converted to an individual 1-5 star
+       rating using measure-specific cut points.
+    2. The overall rating is the weighted average of individual measure stars.
 
     Args:
-        measure_closure_rates: Dict mapping measure -> closure rate (0-1).
+        measure_closure_rates: Dict mapping measure -> performance rate (0-1).
         measure_weights: Dict mapping measure -> weight. Defaults to MEASURE_WEIGHTS.
 
     Returns:
-        Approximate STARS score (1.0-5.0).
+        Overall STARS score (1.0-5.0).
     """
     if measure_weights is None:
         measure_weights = MEASURE_WEIGHTS
 
     total_weight = 0.0
-    weighted_sum = 0.0
+    weighted_star_sum = 0.0
 
     for measure, rate in measure_closure_rates.items():
         w = measure_weights.get(measure, 1.0)
-        weighted_sum += rate * w
+        individual_stars = measure_rate_to_stars(measure, rate)
+        weighted_star_sum += individual_stars * w
         total_weight += w
 
     if total_weight == 0:
         return 1.0
 
-    weighted_avg = weighted_sum / total_weight
+    return weighted_star_sum / total_weight
 
-    # Map weighted average to star scale
-    # Approximate CMS cut points (simplified):
-    # <0.40 = 1 star, 0.40-0.55 = 2, 0.55-0.68 = 3, 0.68-0.80 = 4, >0.80 = 5
-    if weighted_avg >= 0.80:
-        return 4.5 + (weighted_avg - 0.80) / 0.20 * 0.5  # 4.5-5.0
-    elif weighted_avg >= 0.68:
-        return 3.5 + (weighted_avg - 0.68) / 0.12 * 1.0  # 3.5-4.5
-    elif weighted_avg >= 0.55:
-        return 2.5 + (weighted_avg - 0.55) / 0.13 * 1.0  # 2.5-3.5
-    elif weighted_avg >= 0.40:
-        return 1.5 + (weighted_avg - 0.40) / 0.15 * 1.0  # 1.5-2.5
-    else:
-        return 1.0 + weighted_avg / 0.40 * 0.5  # 1.0-1.5
+
+def get_measure_stars_detail(measure_closure_rates: dict) -> dict:
+    """Get individual star ratings and 4-star thresholds for each measure.
+
+    Returns dict mapping measure -> {rate, stars, threshold_4star, at_or_above_4}.
+    Used by the dashboard to show per-measure performance vs target.
+    """
+    from config import MEASURE_CUT_POINTS, MEASURE_WEIGHTS
+    detail = {}
+    for measure, rate in measure_closure_rates.items():
+        cuts = MEASURE_CUT_POINTS.get(measure, {})
+        stars = measure_rate_to_stars(measure, rate)
+        threshold_4 = cuts.get(4, 0.70)
+        detail[measure] = {
+            "rate": rate,
+            "stars": round(stars, 2),
+            "threshold_4star": threshold_4,
+            "at_or_above_4": stars >= 4.0,
+            "gap_to_4star": max(0, threshold_4 - rate),
+            "weight": MEASURE_WEIGHTS.get(measure, 1),
+        }
+    return detail

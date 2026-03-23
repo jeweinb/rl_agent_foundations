@@ -265,7 +265,8 @@ class TestReward:
         assert score_low < score_mid < score_high
 
     def test_stars_bonus_threshold(self):
-        score = compute_stars_score({m: 0.75 for m in HEDIS_MEASURES})
+        # 85% across all measures should exceed 4.0 with CMS cut points
+        score = compute_stars_score({m: 0.85 for m in HEDIS_MEASURES})
         assert score >= STARS_BONUS_THRESHOLD
 
     def test_stars_zero_rates(self):

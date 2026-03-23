@@ -151,43 +151,69 @@ def register_callbacks(app):
         else:
             reg = _empty_fig("Regret Curve — waiting for data...")
 
-        # Measure Table
+        # Measure Table — uses CMS methodology with per-measure star ratings
         if metrics:
             latest = metrics[-1]
+            measure_detail = latest.get("measure_detail", {})
             closure_rates = latest.get("measure_closure_rates", {})
             rows = []
             for m in HEDIS_MEASURES:
-                rate = closure_rates.get(m, 0)
-                weight = MEASURE_WEIGHTS.get(m, 1.0)
-                # Color-coded rate badge
-                if rate >= 0.68:
-                    rate_color, rate_bg = HUMANA_GREEN, "#d1fae5"
-                elif rate >= 0.40:
-                    rate_color, rate_bg = "#d97706", "#fef3c7"
+                detail = measure_detail.get(m, {})
+                rate = detail.get("rate", closure_rates.get(m, 0))
+                stars = detail.get("stars", 1.0)
+                threshold = detail.get("threshold_4star", 0.70)
+                gap_to_4 = detail.get("gap_to_4star", threshold - rate)
+                weight = detail.get("weight", MEASURE_WEIGHTS.get(m, 1))
+                at4 = detail.get("at_or_above_4", False)
+
+                # Star rating badge color
+                if stars >= 4.0:
+                    star_color, star_bg = HUMANA_GREEN, "#d1fae5"
+                elif stars >= 3.0:
+                    star_color, star_bg = "#d97706", "#fef3c7"
+                elif stars >= 2.0:
+                    star_color, star_bg = "#ea580c", "#ffedd5"
                 else:
-                    rate_color, rate_bg = "#dc2626", "#fee2e2"
+                    star_color, star_bg = "#dc2626", "#fee2e2"
+
+                # Rate vs threshold progress bar
+                pct = min(rate / max(threshold, 0.01) * 100, 100)
+                bar_color = HUMANA_GREEN if rate >= threshold else ("#f59e0b" if pct > 60 else "#ef4444")
+
+                progress_bar = html.Div([
+                    html.Div(style={
+                        "width": f"{pct:.0f}%", "height": "8px",
+                        "backgroundColor": bar_color, "borderRadius": "4px",
+                    }),
+                ], style={
+                    "width": "100%", "backgroundColor": "#e2e8f0",
+                    "borderRadius": "4px", "overflow": "hidden", "minWidth": "100px",
+                })
+
                 weight_badge = html.Span(
-                    f"{weight:.0f}x",
+                    f"{weight}x",
                     style={"backgroundColor": NAVY if weight > 1 else "#e2e8f0",
                            "color": "white" if weight > 1 else "#64748b",
                            "padding": "2px 10px", "borderRadius": "12px",
                            "fontSize": "11px", "fontWeight": "600"},
                 )
-                rate_badge = html.Span(
-                    f"{rate:.1%}",
-                    style={"backgroundColor": rate_bg, "color": rate_color,
-                           "padding": "4px 12px", "borderRadius": "12px",
-                           "fontSize": "12px", "fontWeight": "600"},
+                star_badge = html.Span(
+                    f"{'★' * int(stars)}{'☆' * (5 - int(stars))} {stars:.1f}",
+                    style={"color": star_color, "fontWeight": "600", "fontSize": "12px"},
                 )
                 rows.append(html.Tr([
                     html.Td(html.Span(m, style={"fontWeight": "600"})),
                     html.Td(MEASURE_DESCRIPTIONS.get(m, ""), style={"color": "#64748b", "fontSize": "12px"}),
                     html.Td(weight_badge),
-                    html.Td(rate_badge),
+                    html.Td(f"{rate:.1%}", style={"fontWeight": "500"}),
+                    html.Td(f"{threshold:.0%}", style={"color": "#64748b", "fontSize": "12px"}),
+                    html.Td(progress_bar),
+                    html.Td(star_badge),
                 ]))
             table = html.Table([
                 html.Thead(html.Tr([
-                    html.Th("Measure"), html.Th("Description"), html.Th("Weight"), html.Th("Closure Rate"),
+                    html.Th("Measure"), html.Th("Description"), html.Th("Wt"),
+                    html.Th("Rate"), html.Th("4★ Target"), html.Th("Progress"), html.Th("Stars"),
                 ])),
                 html.Tbody(rows),
             ], style={"width": "100%", "borderCollapse": "collapse"})
