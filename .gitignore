@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# RL Agent Foundations — generated data and model checkpoints
+data/generated/
+data/simulation/
+training/checkpoints/
