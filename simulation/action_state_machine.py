@@ -76,36 +76,40 @@ VALID_TRANSITIONS = {
 }
 
 # Transition probabilities by channel
+# Base transition probabilities by channel.
+# These are modulated by patient archetype in advance().
+# High delivery + viewing rates because actions are sent at relevant moments.
+# Failure ~2%, expiry ~5-15% (most messages get seen).
 CHANNEL_TRANSITION_PROBS = {
     "sms": {
-        "QUEUED→PRESENTED": 0.95,
-        "PRESENTED→VIEWED": 0.82,
-        "VIEWED→ACCEPTED": 0.25,
-        "ACCEPTED→COMPLETED": 0.60,
+        "QUEUED→PRESENTED": 0.98,   # 2% delivery failure
+        "PRESENTED→VIEWED": 0.90,   # SMS has high open rates
+        "VIEWED→ACCEPTED": 0.30,    # Archetype modulates this heavily
+        "ACCEPTED→COMPLETED": 0.97, # Once accepted, almost always completes
     },
     "email": {
-        "QUEUED→PRESENTED": 0.92,
-        "PRESENTED→VIEWED": 0.25,
-        "VIEWED→ACCEPTED": 0.35,
-        "ACCEPTED→COMPLETED": 0.55,
+        "QUEUED→PRESENTED": 0.97,
+        "PRESENTED→VIEWED": 0.70,   # Email lower open rate than SMS
+        "VIEWED→ACCEPTED": 0.40,
+        "ACCEPTED→COMPLETED": 0.96,
     },
     "portal": {
-        "QUEUED→PRESENTED": 1.0,
-        "PRESENTED→VIEWED": 0.60,
-        "VIEWED→ACCEPTED": 0.45,
-        "ACCEPTED→COMPLETED": 0.65,
+        "QUEUED→PRESENTED": 1.0,    # Portal always "delivered" (it's there when they log in)
+        "PRESENTED→VIEWED": 0.85,   # If registered, they see it
+        "VIEWED→ACCEPTED": 0.50,
+        "ACCEPTED→COMPLETED": 0.98,
     },
     "app": {
-        "QUEUED→PRESENTED": 0.98,
-        "PRESENTED→VIEWED": 0.55,
-        "VIEWED→ACCEPTED": 0.40,
-        "ACCEPTED→COMPLETED": 0.70,
+        "QUEUED→PRESENTED": 0.99,
+        "PRESENTED→VIEWED": 0.85,   # Push notifications get seen
+        "VIEWED→ACCEPTED": 0.45,
+        "ACCEPTED→COMPLETED": 0.98,
     },
     "ivr": {
-        "QUEUED→PRESENTED": 0.70,
-        "PRESENTED→VIEWED": 0.70,
-        "VIEWED→ACCEPTED": 0.20,
-        "ACCEPTED→COMPLETED": 0.50,
+        "QUEUED→PRESENTED": 0.85,   # ~15% don't pick up
+        "PRESENTED→VIEWED": 0.90,   # If they pick up, they listen
+        "VIEWED→ACCEPTED": 0.25,    # But acceptance is lower (can't click)
+        "ACCEPTED→COMPLETED": 0.95,
     },
 }
 

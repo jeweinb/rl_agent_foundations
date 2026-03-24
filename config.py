@@ -363,14 +363,14 @@ CQL_CONFIG = {
 # Lag Distributions (days) per measure category
 # ---------------------------------------------------------------------------
 # Lag distributions (days between action and gap closure observation).
-# Calibrated for 90-day sim: most resolve within the quarter.
+# Shorter lags so results are visible within the first 2-3 weeks of simulation.
 LAG_DISTRIBUTIONS = {
-    "screenings": {"min": 5, "max": 30, "mean": 14},      # Schedule + complete screening
-    "vaccines": {"min": 1, "max": 10, "mean": 3},          # Quick — walk-in pharmacy
-    "chronic": {"min": 5, "max": 25, "mean": 12},          # Lab results + follow-up
-    "medication_adherence": {"min": 7, "max": 35, "mean": 18},  # PDC measured over 30+ days
-    "mental_health": {"min": 7, "max": 30, "mean": 14},    # PHQ-9 reassessment
-    "care_coordination": {"min": 3, "max": 14, "mean": 7}, # Post-discharge follow-up
+    "screenings": {"min": 2, "max": 10, "mean": 5},
+    "vaccines": {"min": 1, "max": 5, "mean": 2},
+    "chronic": {"min": 2, "max": 8, "mean": 4},
+    "medication_adherence": {"min": 3, "max": 12, "mean": 6},
+    "mental_health": {"min": 2, "max": 10, "mean": 5},
+    "care_coordination": {"min": 1, "max": 5, "mean": 3},
 }
 
 # ---------------------------------------------------------------------------

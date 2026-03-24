@@ -1404,7 +1404,7 @@ def register_callbacks(app):
             daily_closures_list = []
             for m in metrics:
                 actions = max(m.get("daily_actions", 1), 1)
-                closures = sum(m.get("gap_closures", {}).values()) if isinstance(m.get("gap_closures"), dict) else 0
+                closures = m.get("daily_closures", 0)
                 closures_per_action.append(closures / actions)
                 daily_actions_list.append(actions)
                 daily_closures_list.append(closures)

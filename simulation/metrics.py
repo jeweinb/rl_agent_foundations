@@ -57,11 +57,14 @@ class MetricsTracker:
         stars_score = compute_stars_score(closure_rates)
         measure_detail = get_measure_stars_detail(closure_rates)
 
+        daily_closures_total = sum(daily_gap_closures.values()) if daily_gap_closures else 0
+
         metrics = {
             "day": day,
             "daily_reward": daily_reward,
             "cumulative_reward": self.cumulative_reward,
             "daily_actions": daily_actions,
+            "daily_closures": daily_closures_total,
             "cumulative_actions": self.cumulative_actions,
             "stars_score": stars_score,
             "above_bonus_threshold": stars_score >= STARS_BONUS_THRESHOLD,

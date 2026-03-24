@@ -133,17 +133,26 @@ def evaluate_agent_detailed(
     """
     episode_rewards = []
     all_actions_taken = []
-    measure_closures = Counter()
     measure_attempts = Counter()
     channel_actions = Counter()
     channel_closures = Counter()
     no_action_count = 0
     total_actions = 0
 
+    # Track per-patient per-measure gap closure (for STARS-style rates)
+    measure_patients_with_gap = Counter()   # How many patients had this gap open
+    measure_patients_closed = Counter()     # How many of those closed it
+
     for ep_idx in range(n_episodes):
         obs, info = env.reset(seed=seed + ep_idx,
                              options={"patient_idx": ep_idx % len(env.patient_snapshots)})
         total_reward = 0.0
+
+        # Track which gaps this patient started with and which closed
+        initial_gaps = set(info.get("open_gaps", []))
+        for m in initial_gaps:
+            measure_patients_with_gap[m] += 1
+        closed_this_episode = set()
 
         done = False
         while not done:
@@ -168,7 +177,7 @@ def evaluate_agent_detailed(
                     measure_attempts[act.measure] += 1
                     channel_actions[act.channel] += 1
                     if info.get("gap_closed"):
-                        measure_closures[act.measure] += 1
+                        closed_this_episode.add(act.measure)
                         channel_closures[act.channel] += 1
                     all_actions_taken.append({
                         "measure": act.measure,
@@ -179,16 +188,21 @@ def evaluate_agent_detailed(
 
             done = terminated or truncated
 
+        # Record which gaps closed for this patient
+        for m in closed_this_episode:
+            measure_patients_closed[m] += 1
+
         episode_rewards.append(total_reward)
 
-    # Build per-measure closure rates (simulated)
+    # Build per-measure PATIENT closure rates (matches STARS methodology)
+    # "What fraction of patients with gap X closed it during the evaluation?"
     sim_closure_rates = {}
     for m in HEDIS_MEASURES:
-        attempts = measure_attempts.get(m, 0)
-        closures = measure_closures.get(m, 0)
-        sim_closure_rates[m] = closures / max(attempts, 1) if attempts > 0 else 0.0
+        patients_with = measure_patients_with_gap.get(m, 0)
+        patients_closed = measure_patients_closed.get(m, 0)
+        sim_closure_rates[m] = patients_closed / max(patients_with, 1) if patients_with > 0 else 0.0
 
-    # Build per-channel effectiveness
+    # Build per-channel effectiveness (closures per action on that channel)
     sim_channel_rates = {}
     for ch in ["sms", "email", "portal", "app", "ivr"]:
         ch_acts = channel_actions.get(ch, 0)
