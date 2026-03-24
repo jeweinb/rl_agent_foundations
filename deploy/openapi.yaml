@@ -1,0 +1,366 @@
+openapi: "3.1.0"
+info:
+  title: NBA Stars Model — CQL Offline RL Agent API
+  description: |
+    Two deployment components:
+    1. **Inference Endpoint** — real-time request/response for next-best-action
+    2. **Nightly Training Job** — batch process (Databricks) for model retraining
+
+    The inference endpoint receives patient state + eligibility constraints and
+    returns the recommended action. The nightly job ingests the day's experiences
+    + resolved outcomes and produces an updated model checkpoint.
+  version: "1.0.0"
+
+paths:
+  /predict:
+    post:
+      summary: Get next-best-action for a patient
+      description: |
+        Given a patient's current state, open gaps, channel availability, and
+        budget context, returns the recommended action (measure + channel + variant)
+        along with the model's confidence (Q-value) and alternative actions ranked.
+      operationId: predict_action
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PredictionRequest"
+      responses:
+        "200":
+          description: Recommended action
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PredictionResponse"
+
+  /predict/batch:
+    post:
+      summary: Batch prediction for multiple patients
+      description: |
+        Submit a list of patients and receive action recommendations for all.
+        Used by the daily batch process to generate all outreach decisions at once.
+      operationId: predict_batch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [patients]
+              properties:
+                patients:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/PredictionRequest"
+                global_budget_remaining:
+                  type: integer
+                  description: Remaining messages in the global budget pool
+                global_budget_max:
+                  type: integer
+                  description: Total global budget for the quarter
+      responses:
+        "200":
+          description: Batch action recommendations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  predictions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PredictionResponse"
+                  budget_used:
+                    type: integer
+                    description: Messages consumed by this batch
+
+  /health:
+    get:
+      summary: Health check
+      operationId: health_check
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy]
+                  model_version:
+                    type: integer
+                  model_checkpoint:
+                    type: string
+                  uptime_seconds:
+                    type: number
+
+components:
+  schemas:
+    # ===================================================================
+    # INFERENCE ENDPOINT SCHEMAS
+    # ===================================================================
+    PredictionRequest:
+      type: object
+      required: [patient_id, demographics, clinical, open_gaps, engagement]
+      properties:
+        patient_id:
+          type: string
+          example: "P10042"
+        demographics:
+          type: object
+          properties:
+            age: { type: integer, example: 72 }
+            sex: { type: string, enum: [M, F], example: "F" }
+            zip3: { type: string, example: "331" }
+            dual_eligible: { type: boolean }
+            lis_status: { type: boolean }
+            snp_flag: { type: boolean }
+        clinical:
+          type: object
+          properties:
+            bp_systolic_last: { type: number, example: 142.0 }
+            bp_diastolic_last: { type: number, example: 88.0 }
+            a1c_last: { type: number, example: 8.2 }
+            bmi: { type: number, example: 31.4 }
+            ckd_stage: { type: integer, example: 2 }
+            phq9_score: { type: integer, example: 6 }
+            conditions:
+              type: object
+              properties:
+                diabetes: { type: boolean }
+                hypertension: { type: boolean }
+                hyperlipidemia: { type: boolean }
+                depression: { type: boolean }
+                ckd: { type: boolean }
+                chd: { type: boolean }
+                copd: { type: boolean }
+                chf: { type: boolean }
+        medication_fill_rates:
+          type: object
+          properties:
+            statin: { type: number, example: 0.82 }
+            ace_arb: { type: number, example: 0.91 }
+            diabetes_oral: { type: number, example: 0.75 }
+            antidepressant: { type: number, example: 0.0 }
+        open_gaps:
+          type: array
+          items: { type: string }
+          example: ["COL", "EED", "CBP", "MDS"]
+        closed_gaps:
+          type: array
+          items: { type: string }
+          example: ["BCS", "FLU"]
+        engagement:
+          type: object
+          properties:
+            sms_consent: { type: boolean, example: true }
+            email_available: { type: boolean, example: true }
+            portal_registered: { type: boolean, example: false }
+            app_installed: { type: boolean, example: false }
+            sms_response_rate: { type: number, example: 0.6 }
+            email_open_rate: { type: number, example: 0.3 }
+            portal_engagement_rate: { type: number, example: 0.0 }
+            app_engagement_rate: { type: number, example: 0.0 }
+            ivr_completion_rate: { type: number, example: 0.15 }
+            total_contacts_90d: { type: integer, example: 5 }
+            days_since_last_contact: { type: integer, example: 14 }
+        risk_scores:
+          type: object
+          properties:
+            readmission_risk: { type: number, example: 0.12 }
+            disenrollment_risk: { type: number, example: 0.05 }
+            non_compliance_risk: { type: number, example: 0.35 }
+            composite_acuity: { type: number, example: 2.8 }
+        # Live context from the deployment system
+        patient_messages_received:
+          type: integer
+          description: Total messages this patient has received this quarter
+          example: 5
+        patient_response_rate:
+          type: number
+          description: Historical acceptance/click rate for this patient
+          example: 0.3
+        patient_days_since_closure:
+          type: number
+          description: Days since this patient last closed any gap
+          example: 45
+        contacts_this_week:
+          type: integer
+          description: Messages sent to this patient in the rolling 7-day window
+          example: 1
+        global_budget_remaining:
+          type: integer
+          description: Global budget pool remaining
+          example: 102000
+        global_budget_max:
+          type: integer
+          description: Total global budget
+          example: 150000
+        # State machine disposition of recent actions
+        recent_action_states:
+          type: array
+          description: Recent action lifecycle states from the external state machine
+          items:
+            type: object
+            properties:
+              measure: { type: string }
+              state: { type: string, enum: [CREATED, QUEUED, PRESENTED, VIEWED, ACCEPTED, DECLINED, COMPLETED, FAILED, EXPIRED] }
+              day_created: { type: integer }
+
+    PredictionResponse:
+      type: object
+      properties:
+        patient_id:
+          type: string
+        recommended_action:
+          $ref: "#/components/schemas/ActionDetail"
+        is_no_action:
+          type: boolean
+          description: True if the model recommends not contacting this patient
+        q_value:
+          type: number
+          description: Model's estimated future reward for this action
+        alternative_actions:
+          type: array
+          description: Top 5 alternative actions ranked by Q-value
+          items:
+            $ref: "#/components/schemas/ActionDetail"
+        action_mask_summary:
+          type: object
+          description: Summary of which action categories are available/blocked
+          properties:
+            total_valid_actions: { type: integer }
+            blocked_reasons:
+              type: object
+              additionalProperties: { type: integer }
+              example: { "gap_not_open": 45, "no_sms_consent": 12, "weekly_limit": 0 }
+
+    ActionDetail:
+      type: object
+      properties:
+        action_id:
+          type: integer
+          example: 5
+        measure:
+          type: string
+          example: "COL"
+        measure_description:
+          type: string
+          example: "Colorectal Cancer Screening"
+        channel:
+          type: string
+          enum: [sms, email, portal, app, ivr]
+          example: "sms"
+        variant:
+          type: string
+          example: "scheduling_link"
+        variant_description:
+          type: string
+          example: "SMS with scheduling link for Colorectal Cancer Screening"
+        q_value:
+          type: number
+          example: 0.245
+
+    # ===================================================================
+    # NIGHTLY TRAINING JOB SCHEMAS
+    # ===================================================================
+    NightlyTrainingInput:
+      type: object
+      description: |
+        Input data for the nightly Databricks training job.
+        Includes today's experiences, resolved outcomes, and config.
+      required: [experiences, resolved_closures, model_checkpoint_path]
+      properties:
+        experiences:
+          type: array
+          description: Today's action experiences (one per patient)
+          items:
+            type: object
+            required: [patient_id, obs, action, reward, mask]
+            properties:
+              patient_id: { type: string }
+              obs:
+                type: array
+                items: { type: number }
+                description: 96-dim state vector
+              action: { type: integer, description: Action ID taken }
+              reward: { type: number, description: Immediate reward (may be retroactively updated) }
+              mask:
+                type: array
+                items: { type: number }
+                description: 125-dim action mask at time of decision
+        resolved_closures:
+          type: array
+          description: Gap closures that resolved since last training (from claims data)
+          items:
+            type: object
+            properties:
+              patient_id: { type: string }
+              measure: { type: string }
+              action_day: { type: integer, description: Day the triggering action was sent }
+              closure_day: { type: integer, description: Day the gap was confirmed closed }
+              reward_delta: { type: number, description: Reward to add to the original experience }
+        historical_replay_sample:
+          type: array
+          description: Random sample from historical experience buffer for Dyna replay
+          items:
+            type: object
+            properties:
+              obs: { type: array, items: { type: number } }
+              action: { type: integer }
+              reward: { type: number }
+              mask: { type: array, items: { type: number } }
+        model_checkpoint_path:
+          type: string
+          description: Path to current champion model checkpoint
+          example: "s3://models/champion_v15.pt"
+        training_config:
+          type: object
+          properties:
+            cql_epochs: { type: integer, default: 5 }
+            batch_size: { type: integer, default: 256 }
+            eval_episodes: { type: integer, default: 1000 }
+            min_q_weight: { type: number, default: 1.0 }
+
+    NightlyTrainingOutput:
+      type: object
+      description: Output from the nightly training job
+      properties:
+        champion_score:
+          type: number
+          description: Champion model's mean reward on learned world evaluation
+        challenger_score:
+          type: number
+          description: Challenger model's mean reward on learned world evaluation
+        promoted:
+          type: boolean
+          description: Whether the challenger was promoted to champion
+        new_model_version:
+          type: integer
+        new_checkpoint_path:
+          type: string
+          example: "s3://models/champion_v16.pt"
+        training_metrics:
+          type: object
+          properties:
+            transitions_trained: { type: integer }
+            cql_loss: { type: number }
+            actor_loss: { type: number }
+        simulation_predictions:
+          type: object
+          description: What the learned world predicts for tomorrow
+          properties:
+            mean_reward: { type: number }
+            no_action_rate: { type: number }
+            sim_closure_rates:
+              type: object
+              additionalProperties: { type: number }
+            sim_channel_rates:
+              type: object
+              additionalProperties: { type: number }
+            action_dist_by_measure:
+              type: object
+              additionalProperties: { type: integer }

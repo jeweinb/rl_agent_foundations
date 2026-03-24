@@ -293,7 +293,26 @@ DAYS_SINCE_NORMALIZATION_MAX = 90
 YEAR_DAYS = 365
 
 # ---------------------------------------------------------------------------
-# Gap closure probability factors (simulation world dynamics)
+# Gap closure base rates (annual, without intervention) — domain knowledge
+# These represent the baseline probability a gap closes in a year without outreach.
+# In production, these could be estimated from historical claims data.
+# ---------------------------------------------------------------------------
+GAP_CLOSURE_BASE_RATES: Dict[str, float] = {
+    "COL": 0.55, "BCS": 0.65, "EED": 0.50,
+    "FVA": 0.40, "FVO": 0.50, "AIS": 0.30, "FLU": 0.60,
+    "CBP": 0.62, "BPD": 0.58, "HBD": 0.52, "KED": 0.45,
+    "MAC": 0.70, "MRA": 0.72, "MDS": 0.68,
+    "DSF": 0.35, "DRR": 0.30, "DMC02": 0.55,
+    "TRC_M": 0.48,
+}
+
+# Channel outreach lift factors (multiplicative boost on base rate)
+OUTREACH_LIFT: Dict[str, float] = {
+    "sms": 1.15, "email": 1.08, "portal": 1.12, "app": 1.18, "ivr": 1.05,
+}
+
+# ---------------------------------------------------------------------------
+# Gap closure probability factors (per-interaction dynamics)
 # ---------------------------------------------------------------------------
 CLOSURE_BASE_MULTIPLIER = 0.30        # base_rate * this * archetype factors = per-interaction closure prob
 CLOSURE_BEST_CHANNEL_FACTOR = 2.5     # Multiplied when using best channel for measure

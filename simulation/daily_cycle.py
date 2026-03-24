@@ -14,6 +14,48 @@ from simulation.world import WorldSimulator
 from simulation.logger import get_logger
 
 
+def _apply_retroactive_rewards(reward_updates: List[Dict[str, Any]]):
+    """Update past experience buffers with resolved closure rewards.
+
+    When a gap closes on day 15 from an action taken on day 5, this updates
+    day 5's experience_buffer.json to include the closure reward. The nightly
+    Dyna update then trains CQL on the full reward signal.
+
+    In production, this would update the experience store/database directly.
+    """
+    from collections import defaultdict
+
+    by_day = defaultdict(list)
+    for u in reward_updates:
+        by_day[u["scheduled_day"]].append(u)
+
+    for sched_day, updates in by_day.items():
+        exp_path = os.path.join(cfg.SIMULATION_DATA_DIR, f"day_{sched_day:02d}", "experience_buffer.json")
+        if not os.path.exists(exp_path):
+            continue
+        try:
+            with open(exp_path) as f:
+                experiences = json.load(f)
+
+            update_map = {}
+            for u in updates:
+                pid = u["patient_id"]
+                update_map[pid] = update_map.get(pid, 0) + u["reward_delta"]
+
+            modified = False
+            for exp in experiences:
+                pid = exp.get("patient_id")
+                if pid in update_map:
+                    exp["reward"] = exp.get("reward", 0) + update_map[pid]
+                    modified = True
+
+            if modified:
+                with open(exp_path, "w") as f:
+                    json.dump(experiences, f, default=str)
+        except Exception:
+            pass  # Don't crash on file I/O errors
+
+
 def run_daily_cycle(
     day: int,
     agent,
@@ -93,6 +135,13 @@ def run_daily_cycle(
 
     # 4. Advance day in world (state machine, lagged rewards, rolling windows)
     day_summary = world.advance_day()
+
+    # 4b. Retroactively update past experience buffers with resolved closure rewards
+    # When a gap closes on day 15 from an action on day 5, update day 5's
+    # experience buffer so the nightly Dyna update sees the full reward signal.
+    reward_updates = day_summary.get("reward_updates", [])
+    if reward_updates:
+        _apply_retroactive_rewards(reward_updates)
 
     # Update engagement signals for today's actions after state machine advance
     for action_record in daily_actions:

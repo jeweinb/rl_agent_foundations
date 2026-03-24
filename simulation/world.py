@@ -21,11 +21,11 @@ from config import (
     compute_global_budget, get_measure_category,
     AVG_MESSAGES_PER_PATIENT, BUDGET_WARNING_THRESHOLD, BUDGET_CRITICAL_THRESHOLD,
 )
-from datagen.constants import GAP_CLOSURE_BASE_RATES
+from config import GAP_CLOSURE_BASE_RATES
 from environment.state_space import snapshot_to_vector
 from environment.action_masking import compute_action_mask
 from environment.reward import compute_reward
-from simulation.action_state_machine import ActionLifecycleTracker
+from simulation.action_state_machine import ActionLifecycleTracker, ActionState
 from simulation.lagged_rewards import LaggedRewardQueue
 
 
@@ -254,7 +254,14 @@ class WorldSimulator:
     def advance_day(self) -> Dict[str, Any]:
         """End-of-day processing. Returns daily summary."""
         # Advance all pending state machine actions one step
-        self.state_machine.advance_all(self.day)
+        transitions = self.state_machine.advance_all(self.day)
+
+        # Count state machine acceptances as patient responses
+        for t in transitions:
+            if t.get("to_state") in (ActionState.ACCEPTED, ActionState.COMPLETED):
+                ps = self.patients.get(t.get("patient_id"))
+                if ps:
+                    ps.responses += 1
 
         # Prune rolling contact windows
         for ps in self.patients.values():
@@ -264,19 +271,25 @@ class WorldSimulator:
         resolved = self.lagged_queue.collect(self.day)
         self.daily_gap_closures = {m: 0 for m in HEDIS_MEASURES}
         closure_reward = 0.0
+        reward_updates = []  # Track which past experiences need reward updates
         for r in resolved:
             if r["will_close"]:
                 measure = r["measure"]
                 self.daily_gap_closures[measure] = \
                     self.daily_gap_closures.get(measure, 0) + 1
-                # Gap closure reward (the real objective)
                 measure_weight = MEASURE_WEIGHTS.get(measure, 1)
                 closure_reward += 1.0 * measure_weight
-                # Update patient's last closure day
                 ps = self.patients.get(r["patient_id"])
                 if ps:
                     ps.last_closure_day = self.day
                     ps.responses += 1
+                # Track for caller to handle retroactive updates
+                reward_updates.append({
+                    "patient_id": r["patient_id"],
+                    "scheduled_day": r.get("scheduled_day", 0),
+                    "measure": measure,
+                    "reward_delta": 1.0 * measure_weight,
+                })
 
         # Count patients per measure (for closure rate denominator)
         total_patients = {m: 0 for m in HEDIS_MEASURES}
@@ -289,6 +302,7 @@ class WorldSimulator:
             "daily_actions": self.daily_actions_taken,
             "gap_closures": dict(self.daily_gap_closures),
             "closure_reward": closure_reward,
+            "reward_updates": reward_updates,
             "total_patients": total_patients,
             "budget_remaining": self.budget_remaining,
             "budget_max": self.budget_total,

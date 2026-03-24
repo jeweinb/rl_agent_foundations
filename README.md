@@ -434,14 +434,14 @@ The model that learns these patterns will:
 
 ```mermaid
 graph TD
-    S[State Vector 96-dim] --> A[Actor Network<br/>96→256→256→125<br/>Masked Softmax π&#40;a|s&#41;]
-    S --> Q1[Critic Q1<br/>96→256→256→125]
-    S --> Q2[Critic Q2<br/>96→256→256→125]
-    Q1 --> MIN[Q = min&#40;Q1, Q2&#41;<br/>Conservative Estimate]
+    S["State Vector (96-dim)"] --> A["Actor Network\n96 → 256 → 256 → 125\nMasked Softmax"]
+    S --> Q1["Critic Q1\n96 → 256 → 256 → 125"]
+    S --> Q2["Critic Q2\n96 → 256 → 256 → 125"]
+    Q1 --> MIN["Q = min of Q1, Q2\nConservative Estimate"]
     Q2 --> MIN
-    MIN --> CQL[CQL Penalty<br/>LogSumExp&#40;Q_valid&#41; − Q&#40;s, a_data&#41;]
-    A --> ACTION[Selected Action]
-    MASK[Action Mask<br/>125 booleans] --> A
+    MIN --> CQL["CQL Penalty\nPushes Q down for OOD actions"]
+    A --> ACTION["Selected Action"]
+    MASK["Action Mask\n125 booleans"] --> A
 ```
 
 **Training pipeline:**
@@ -526,120 +526,126 @@ scipy>=1.11.0        scikit-learn>=1.3.0
 
 ```mermaid
 graph TB
-    subgraph CONFIG["config.py — Central Configuration"]
-        C1[18 HEDIS Measures + CMS Cut Points]
-        C2[125 Action Catalog]
-        C3[12 Patient Archetypes]
-        C4[Reward Weights · Budget Params]
+    subgraph CORE["Production Core"]
+        CONFIG["config.py\nMeasures, Actions, Weights"]
+        ENV["environment/\nstate_space, action_masking\nreward, hedis_env"]
+        TRAIN["training/\ndata_loader, BC, CQL\nevaluation"]
+        MODELS["models/\ndynamics_model\nreward_model"]
     end
 
-    subgraph DATAGEN["datagen/ — Mock Data Generation"]
-        DG1[archetypes.py<br/>12 behavioral segments]
-        DG2[patients.py<br/>archetype-driven profiles]
-        DG3[state_features.py<br/>clinical snapshots]
-        DG4[historical_activity.py<br/>200k outreach records]
-        DG5[gap_closure.py<br/>longitudinal timelines]
-        DG6[action_eligibility.py<br/>constraint masks]
+    subgraph MOCK["Mock Layer (remove in production)"]
+        DATAGEN["datagen/\nMock data generation"]
+        WORLD["world.py\nMock world simulator"]
+        LOOP["loop.py\nMock 90-day loop"]
     end
 
-    subgraph MODELS["models/ — Learned World Models"]
-        M1[dynamics_model.py<br/>s' = f&#40;s, a&#41; + ε]
-        M2[reward_model.py<br/>P&#40;closure | s, a, days&#41;]
+    subgraph DEPLOY["Production Deployment"]
+        INFER["Inference Server\nDocker container\nPOST /predict"]
+        NIGHTLY["Nightly Job\nDatabricks\nDyna CQL update"]
     end
 
-    subgraph TRAINING["training/ — RL Pipeline"]
-        T1[data_loader.py<br/>JSON → episodes]
-        T2[behavior_cloning.py<br/>BC warm-start]
-        T3[cql_trainer.py<br/>Actor-Critic CQL]
-        T4[evaluation.py<br/>champion vs challenger]
+    subgraph DATA["Data"]
+        REAL["Real Data\nEHR, Claims, Engagement"]
+        STORE["Metrics Store\nJSON / Database"]
+        CKPT["Model Checkpoints\nchampion.pt"]
     end
 
-    subgraph ENV["environment/ — Gym Interface"]
-        E1[hedis_env.py<br/>Model-based evaluation]
-        E2[action_masking.py<br/>business rules]
-        E3[state_space.py<br/>96-dim vectors]
-        E4[reward.py<br/>gap closure + cost]
+    subgraph DASH["Dashboard :8050"]
+        D1["STARS Overview"]
+        D2["Live Behavior"]
+        D3["Training & Sim"]
+        D4["Measures"]
+        D5["Patient Journey"]
     end
 
-    subgraph SIM["simulation/ — 90-Day Loop"]
-        S1[loop.py<br/>orchestrator]
-        S2[world.py<br/>WorldSimulator]
-        S3[daily_cycle.py<br/>agent ↔ world]
-        S4[nightly_cycle.py<br/>Dyna-style update]
-        S5[action_state_machine.py<br/>lifecycle tracking]
-        S6[lagged_rewards.py<br/>delayed closures]
-    end
-
-    subgraph DATA["data/ — JSON Store"]
-        D1[generated/<br/>patients, history, gaps, eligibility]
-        D2[simulation/<br/>daily outputs, metrics, predictions]
-        D3[checkpoints/<br/>champion.pt, dynamics.pt, reward.pt]
-    end
-
-    subgraph DASH["dashboard/ — Plotly Dash :8050"]
-        DA1[STARS Overview]
-        DA2[Live Behavior]
-        DA3[Training & Simulation]
-        DA4[Measures]
-        DA5[Patient Journey]
-        DA6[Logs]
-    end
-
-    CONFIG --> DATAGEN
     CONFIG --> ENV
-    CONFIG --> TRAINING
-    CONFIG --> SIM
+    CONFIG --> TRAIN
+    CONFIG --> MODELS
 
-    DATAGEN -->|generates| D1
-    D1 -->|loaded by| TRAINING
-    D1 -->|loaded by| SIM
-    TRAINING -->|produces| D3
-    SIM -->|writes daily| D2
-    S4 -->|updates| D3
-    M1 --> E1
-    M2 --> E1
-    E1 -->|evaluates| T4
-    S2 -->|ground truth| S3
-    D2 -->|5s polling| DASH
-    D3 -->|Q-values| DASH
+    DATAGEN -.->|mock| TRAIN
+    REAL -->|production| TRAIN
+    REAL -->|production| INFER
+
+    TRAIN --> CKPT
+    MODELS --> ENV
+    ENV --> TRAIN
+
+    INFER --> CKPT
+    NIGHTLY --> CKPT
+    NIGHTLY --> MODELS
+
+    WORLD -.->|mock| LOOP
+    LOOP -.->|mock| STORE
+
+    INFER -->|production| STORE
+    NIGHTLY -->|production| STORE
+
+    STORE --> DASH
+    CKPT --> DASH
 ```
 
-### Data Flow
+### Production Data Flow
 
 ```mermaid
 sequenceDiagram
-    participant DG as datagen/
-    participant DS as data/generated/
-    participant TR as training/
-    participant CK as checkpoints/
-    participant WS as WorldSimulator
-    participant DC as daily_cycle
-    participant NC as nightly_cycle
-    participant HE as HEDISEnv (learned)
-    participant DD as data/simulation/
+    participant EHR as Real Data Sources
+    participant INF as Inference Server
+    participant ACT as Action Dispatch
+    participant SM as State Machine
+    participant EXP as Experience Store
+    participant NJ as Nightly Job
+    participant HE as HEDISEnv
+    participant CK as Checkpoints
     participant DB as Dashboard
 
-    DG->>DS: Generate 4 JSON datasets
-    DS->>TR: Load historical data
-    TR->>CK: Train BC → CQL → save champion.pt
-    DS->>TR: Train dynamics + reward models
-    TR->>CK: Save dynamics_model.pt, reward_model.pt
+    Note over EHR,DB: Daily Cycle
+    EHR->>INF: Patient state + eligibility
+    INF->>INF: Build state vector + mask
+    INF->>INF: Agent selects action
+    INF->>ACT: Dispatch to channel vendor
+    ACT->>SM: Track lifecycle
+    INF->>EXP: Store experience
 
-    loop Each Simulated Day
-        DC->>WS: get_patient_context() for each patient
-        DC->>DC: Agent selects action
-        DC->>WS: execute_action() → outcome
-        DC->>WS: advance_day() → lagged rewards, state machine
-        DC->>DD: Write actions, experiences, state machine
+    Note over EHR,DB: Nightly Cycle
+    EHR->>NJ: Resolved gap closures from claims
+    NJ->>EXP: Retroactive reward updates
+    EXP->>NJ: Today + recent experiences
+    NJ->>NJ: Dyna CQL update
+    NJ->>HE: Evaluate champion vs challenger
+    NJ->>CK: Promote if better
+    NJ->>NJ: Update dynamics + reward models
 
-        NC->>DD: Load today's + recent experiences
-        NC->>CK: Online update dynamics + reward models
-        NC->>CK: Clone champion → train challenger CQL
-        NC->>HE: Evaluate both on learned world
-        NC->>CK: Promote if challenger wins
-        NC->>DD: Write nightly metrics + sim predictions
-    end
-
-    DD-->>DB: Poll every 5 seconds
-    CK-->>DB: Load for Q-value leaderboard
+    Note over EHR,DB: Continuous
+    EXP-->>DB: Metrics + actions
+    CK-->>DB: Q-values for leaderboard
 ```
+
+## Deployment
+
+Two production components:
+
+### 1. Inference Server (Docker)
+Real-time request/response endpoint for next-best-action.
+
+```
+deploy/
+├── Dockerfile           # Python 3.10, CPU-only PyTorch
+├── inference_server.py  # Flask REST API
+├── openapi.yaml         # Full API spec with schemas
+└── nightly_job.py       # Databricks notebook for retraining
+```
+
+**Endpoints:**
+- `POST /predict` — single patient recommendation
+- `POST /predict/batch` — batch recommendations for daily run
+- `GET /health` — model version + uptime
+
+### 2. Nightly Training Job (Databricks)
+Scheduled job that runs CQL Dyna-style update + champion/challenger evaluation.
+
+**Input:** Today's experiences + resolved closures from Unity Catalog
+**Output:** Updated model checkpoint + simulation predictions
+
+See `deploy/openapi.yaml` for full input/output schemas and `deploy/nightly_job.py` for the Databricks implementation.
+
+See [PRODUCTION_MIGRATION.md](PRODUCTION_MIGRATION.md) for the complete migration guide.

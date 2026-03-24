@@ -161,7 +161,7 @@ class HEDISEnv(gym.Env):
                 # P(close today) = 1 - (1 - P(close in 90 days))^(1/90)
                 closure_prob = 1.0 - (1.0 - min(closure_prob_90d, 0.99)) ** (1.0 / 90.0)
             else:
-                from datagen.constants import GAP_CLOSURE_BASE_RATES
+                from config import GAP_CLOSURE_BASE_RATES
                 closure_prob = GAP_CLOSURE_BASE_RATES.get(measure, 0.5) * 0.02
 
             gap_closed = self.np_random.random() < closure_prob
