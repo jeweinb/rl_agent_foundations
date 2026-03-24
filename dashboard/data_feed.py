@@ -78,14 +78,20 @@ def load_state_machine_data(day: int = None) -> List[Dict[str, Any]]:
 
 
 def load_all_state_machine_data() -> List[Dict[str, Any]]:
-    """Load all state machine records across all days."""
-    all_records = []
-    for day_dir in sorted(glob.glob(os.path.join(SIMULATION_DATA_DIR, "day_*"))):
-        path = os.path.join(day_dir, "state_machine.json")
+    """Load cumulative state machine records."""
+    # Prefer the cumulative file (written each day with all records)
+    cumulative_path = os.path.join(SIMULATION_DATA_DIR, "state_machine_cumulative.json")
+    if os.path.exists(cumulative_path):
+        with open(cumulative_path) as f:
+            return json.load(f)
+    # Fallback: load from latest day
+    day_dirs = sorted(glob.glob(os.path.join(SIMULATION_DATA_DIR, "day_*")))
+    if day_dirs:
+        path = os.path.join(day_dirs[-1], "state_machine.json")
         if os.path.exists(path):
             with open(path) as f:
-                all_records.extend(json.load(f))
-    return all_records
+                return json.load(f)
+    return []
 
 
 def get_patient_journey(patient_id: str) -> List[Dict[str, Any]]:

@@ -33,6 +33,8 @@ class MetricsTracker:
         model_version: int = 1,
         action_distribution: Dict[str, int] = None,
         state_machine_funnel: Dict[str, int] = None,
+        avg_budget_remaining: float = None,
+        budget_exhausted_count: int = 0,
     ):
         """Record metrics for one simulated day."""
         self.cumulative_reward += daily_reward
@@ -71,6 +73,8 @@ class MetricsTracker:
             "model_version": model_version,
             "action_distribution": action_distribution or {},
             "state_machine_funnel": state_machine_funnel or {},
+            "avg_budget_remaining": avg_budget_remaining,
+            "budget_exhausted_count": budget_exhausted_count,
         }
         self.daily_metrics.append(metrics)
         return metrics

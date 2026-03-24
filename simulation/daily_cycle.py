@@ -60,12 +60,18 @@ def run_daily_cycle(
                 "max": MESSAGE_BUDGET_PER_QUARTER,
                 "total_sent": 0,
                 "quarter_start_day": 1,
+                "contacts_this_week": 0,
+                "week_start_day": 1,
             }
-        # Quarterly replenishment
         budget = patient_budgets[pid]
+        # Quarterly budget replenishment
         if day - budget["quarter_start_day"] >= BUDGET_REPLENISH_INTERVAL_DAYS:
             budget["remaining"] = MESSAGE_BUDGET_PER_QUARTER
             budget["quarter_start_day"] = day
+        # Weekly contact counter reset
+        if day - budget.get("week_start_day", 1) >= 7:
+            budget["contacts_this_week"] = 0
+            budget["week_start_day"] = day
 
     eligibility_map = {e["patient_id"]: e for e in eligibility_snapshots}
 
@@ -116,7 +122,7 @@ def run_daily_cycle(
         mask = compute_action_mask(
             open_gaps=open_gaps,
             channel_availability=channel_avail,
-            contacts_this_week=len(pending),
+            contacts_this_week=budget.get("contacts_this_week", 0),
             recent_measures=recent_measures,
             budget_remaining=budget_remaining,
         )
@@ -160,28 +166,31 @@ def run_daily_cycle(
             # Mirrors the same patterns as historical data:
             # best channel → higher closure, engagement → higher closure
             from datagen.constants import GAP_CLOSURE_BASE_RATES
-            from datagen.historical_activity import BEST_CHANNEL_BY_CATEGORY, _get_category
+            from config import (
+                get_measure_category, BEST_CHANNEL_BY_CATEGORY,
+                CLOSURE_BASE_MULTIPLIER, CLOSURE_BEST_CHANNEL_FACTOR,
+                CLOSURE_CLICKED_FACTOR, CLOSURE_OPENED_FACTOR,
+                CLOSURE_DELIVERED_FACTOR,
+            )
             base_rate = GAP_CLOSURE_BASE_RATES.get(action_info.measure, 0.5)
-            category = _get_category(action_info.measure)
+            category = get_measure_category(action_info.measure)
             best_ch = BEST_CHANNEL_BY_CATEGORY.get(category, "sms")
 
-            # Channel-measure match factor
-            ch_factor = 1.8 if action_info.channel == best_ch else 1.0
-
-            closure_prob = base_rate * 0.15 * ch_factor
+            ch_factor = CLOSURE_BEST_CHANNEL_FACTOR if action_info.channel == best_ch else 1.0
+            closure_prob = base_rate * CLOSURE_BASE_MULTIPLIER * ch_factor
             if signals.get("clicked"):
-                closure_prob *= 3.0
+                closure_prob *= CLOSURE_CLICKED_FACTOR
             elif signals.get("opened"):
-                closure_prob *= 1.5
+                closure_prob *= CLOSURE_OPENED_FACTOR
             elif signals.get("delivered"):
-                closure_prob *= 1.1
+                closure_prob *= CLOSURE_DELIVERED_FACTOR
 
             lagged_queue.schedule(
                 current_day=day,
                 patient_id=pid,
                 measure=action_info.measure,
                 action_id=action_id,
-                closure_prob=min(closure_prob, 0.6),
+                closure_prob=min(closure_prob, cfg.CLOSURE_PROB_CAP),
             )
 
             # Compute immediate reward (budget-aware)
@@ -196,9 +205,10 @@ def run_daily_cycle(
                 budget_max=budget["max"],
             )
 
-            # Decrement patient budget
+            # Decrement patient budget and increment weekly counter
             budget["remaining"] = max(0, budget["remaining"] - 1)
             budget["total_sent"] += 1
+            budget["contacts_this_week"] = budget.get("contacts_this_week", 0) + 1
 
             # Track
             act_key = f"{action_info.measure}_{action_info.channel}"
@@ -267,8 +277,15 @@ def run_daily_cycle(
     with open(os.path.join(day_dir, "experience_buffer.json"), "w") as f:
         json.dump(daily_experiences, f, default=str)
 
+    # Save ALL state machine records (cumulative) so Sankey sees full lifecycle
+    all_sm_records = state_machine.to_records()
     with open(os.path.join(day_dir, "state_machine.json"), "w") as f:
-        json.dump(state_machine.to_records()[-len(patient_snapshots):], f, indent=2, default=str)
+        json.dump(all_sm_records, f, indent=2, default=str)
+
+    # Also save a cumulative state machine snapshot for the dashboard
+    cumulative_sm_path = os.path.join(cfg.SIMULATION_DATA_DIR, "state_machine_cumulative.json")
+    with open(cumulative_sm_path, "w") as f:
+        json.dump(all_sm_records, f, default=str)
 
     return {
         "day": day,

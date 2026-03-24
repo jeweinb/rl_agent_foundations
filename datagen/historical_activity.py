@@ -21,32 +21,11 @@ from config import (
     MEASURE_CATEGORIES,
 )
 
-# Best channel for each measure category — creates learnable structure
-BEST_CHANNEL_BY_CATEGORY = {
-    "screenings": "sms",        # SMS scheduling links work best for screenings
-    "vaccines": "sms",          # SMS pharmacy locators for vaccines
-    "chronic": "app",           # App home monitoring for chronic
-    "medication_adherence": "app",  # App refill reminders + gamification
-    "mental_health": "portal",  # Portal screening tools for mental health
-    "care_coordination": "ivr", # IVR care navigator for transitions
-}
-
-# Second-best channel
-SECOND_BEST_CHANNEL = {
-    "screenings": "email",
-    "vaccines": "email",
-    "chronic": "sms",
-    "medication_adherence": "sms",
-    "mental_health": "sms",
-    "care_coordination": "sms",
-}
-
-
-def _get_category(measure: str) -> str:
-    for cat, measures in MEASURE_CATEGORIES.items():
-        if measure in measures:
-            return cat
-    return "chronic"
+from config import (
+    get_measure_category,
+    BEST_CHANNEL_BY_CATEGORY,
+    SECOND_BEST_CHANNEL_BY_CATEGORY as SECOND_BEST_CHANNEL,
+)
 
 
 def generate_historical_activity(
@@ -92,7 +71,7 @@ def generate_historical_activity(
         if not eligible:
             eligible = ["COL", "FLU"]
         measure = rng.choice(eligible)
-        category = _get_category(measure)
+        category = get_measure_category(measure)
 
         # --- PATTERN 1: Channel selection with measure affinity ---
         # 40% of time use best channel, 25% second-best, 35% random

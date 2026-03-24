@@ -31,6 +31,37 @@ class ActionState(str, Enum):
     EXPIRED = "EXPIRED"
 
 
+# Ordered lifecycle stages (happy path). Used by dashboards for funnels/Sankeys.
+LIFECYCLE_STAGES = [
+    ActionState.CREATED,
+    ActionState.QUEUED,
+    ActionState.PRESENTED,
+    ActionState.VIEWED,
+    ActionState.ACCEPTED,
+    ActionState.COMPLETED,
+]
+
+# Terminal states (action lifecycle is finished)
+TERMINAL_STATES = {
+    ActionState.COMPLETED,
+    ActionState.DECLINED,
+    ActionState.FAILED,
+    ActionState.EXPIRED,
+}
+
+# All states in display order (lifecycle + failure modes)
+ALL_STATES_ORDERED = [
+    ActionState.CREATED,
+    ActionState.QUEUED,
+    ActionState.PRESENTED,
+    ActionState.VIEWED,
+    ActionState.ACCEPTED,
+    ActionState.COMPLETED,
+    ActionState.DECLINED,
+    ActionState.FAILED,
+    ActionState.EXPIRED,
+]
+
 # Valid state transitions
 VALID_TRANSITIONS = {
     ActionState.CREATED: [ActionState.QUEUED],

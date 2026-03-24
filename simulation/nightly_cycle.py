@@ -1,10 +1,18 @@
 """
-Nightly simulation cycle.
-Retrains a challenger model on all accumulated data,
-evaluates champion vs challenger, and promotes if better.
+Nightly simulation cycle — Dyna-style online update.
+
+Instead of full retraining from scratch each night, does a quick incremental
+update on the champion model using:
+1. Today's new experiences (real interactions)
+2. A small replay sample from historical data (prevents catastrophic forgetting)
+3. A few fast CQL epochs on this combined mini-batch
+
+This mirrors production deployment: incremental nightly model updates, not
+cold retraining. Champion/challenger evaluation still runs to gate promotions.
 """
 import json
 import os
+import copy
 import torch
 import numpy as np
 from typing import Dict, Any, List, Optional
@@ -20,20 +28,29 @@ from environment.hedis_env import HEDISEnv
 
 
 def _load_simulation_experiences(up_to_day: int) -> List[Dict]:
-    """Load all simulation experience buffers up to given day."""
+    """Load simulation experience buffers up to given day."""
     all_experiences = []
     for day in range(1, up_to_day + 1):
         exp_path = os.path.join(SIMULATION_DATA_DIR, f"day_{day:02d}", "experience_buffer.json")
         if os.path.exists(exp_path):
             with open(exp_path) as f:
-                experiences = json.load(f)
-                all_experiences.extend(experiences)
+                all_experiences.extend(json.load(f))
     return all_experiences
 
 
-def _experiences_to_episodes(experiences: List[Dict]) -> List[Dict]:
+def _load_today_experiences(day: int) -> List[Dict]:
+    """Load only today's experience buffer."""
+    exp_path = os.path.join(SIMULATION_DATA_DIR, f"day_{day:02d}", "experience_buffer.json")
+    if os.path.exists(exp_path):
+        with open(exp_path) as f:
+            return json.load(f)
+    return []
+
+
+def _experiences_to_episodes(experiences: List[Dict], rng=None) -> List[Dict]:
     """Convert flat experiences to episode format for CQL training."""
-    # Group by patient
+    if rng is None:
+        rng = np.random.default_rng()
     by_patient: Dict[str, List] = {}
     for exp in experiences:
         pid = exp.get("patient_id", "unknown")
@@ -59,95 +76,117 @@ def _experiences_to_episodes(experiences: List[Dict]) -> List[Dict]:
     return episodes
 
 
+# Cache historical episodes so we only load them once
+_historical_cache = None
+
+
+def _get_historical_episodes():
+    global _historical_cache
+    if _historical_cache is None:
+        datasets = load_datasets()
+        _historical_cache = build_offline_episodes(
+            datasets["state_features"],
+            datasets["historical_activity"],
+            datasets["action_eligibility"],
+        )
+    return _historical_cache
+
+
 def run_nightly_cycle(
     day: int,
     champion: ActorCriticCQL,
     patient_snapshots: list,
     eligibility_snapshots: list,
-    cql_epochs: int = 30,
-    eval_episodes: int = 200,
+    cql_epochs: int = 5,
+    eval_episodes: int = 50,
+    history_replay_frac: float = 0.05,
     verbose: bool = True,
 ) -> Dict[str, Any]:
-    """Run nightly retraining and evaluation.
+    """Dyna-style nightly update.
+
+    1. Take today's experiences (~5000 transitions)
+    2. Sample a small fraction of historical episodes for replay
+    3. Clone the champion, do a quick CQL update on the mixed batch
+    4. Evaluate champion vs challenger on the gym env
+    5. Promote if challenger is better
 
     Args:
         day: Current simulation day.
-        champion: Current champion Q-network.
+        champion: Current champion agent.
         patient_snapshots: Patient state snapshots.
         eligibility_snapshots: Eligibility snapshots.
-        cql_epochs: CQL training epochs for challenger.
-        eval_episodes: Episodes for evaluation.
+        cql_epochs: Quick CQL epochs for the update (default 5).
+        eval_episodes: Episodes for evaluation (default 50).
+        history_replay_frac: Fraction of historical data to replay (default 5%).
         verbose: Print progress.
-
-    Returns:
-        Dict with nightly results: promoted, scores, etc.
     """
     if verbose:
-        print(f"\n{'='*60}")
-        print(f"Night {day}: Retraining and Evaluation")
-        print(f"{'='*60}")
+        print(f"\n  Night {day}: Dyna-style update", flush=True)
 
-    # Load historical + simulation data
-    datasets = load_datasets()
-    historical_episodes = build_offline_episodes(
-        datasets["state_features"],
-        datasets["historical_activity"],
-        datasets["action_eligibility"],
-    )
+    rng = np.random.default_rng(day)
 
-    # Add simulation experiences
-    sim_experiences = _load_simulation_experiences(day)
-    sim_episodes = _experiences_to_episodes(sim_experiences)
+    # --- 1. Today's new experiences ---
+    today_experiences = _load_today_experiences(day)
+    today_episodes = _experiences_to_episodes(today_experiences, rng)
 
-    all_episodes = historical_episodes + sim_episodes
+    # --- 2. Sample historical replay buffer ---
+    historical = _get_historical_episodes()
+    n_replay = max(1, int(len(historical) * history_replay_frac))
+    replay_indices = rng.choice(len(historical), size=min(n_replay, len(historical)), replace=False)
+    replay_episodes = [historical[i] for i in replay_indices]
+
+    # --- 3. Also include recent simulation days (last 3 days) for momentum ---
+    recent_experiences = []
+    for recent_day in range(max(1, day - 3), day):
+        recent_experiences.extend(_load_today_experiences(recent_day))
+    recent_episodes = _experiences_to_episodes(recent_experiences, rng)
+
+    # Combine: today + recent sim + historical replay
+    training_episodes = today_episodes + recent_episodes + replay_episodes
+    total_transitions = sum(len(ep["obs"]) - 1 for ep in training_episodes if len(ep["obs"]) > 1)
+
     if verbose:
-        print(f"  Training data: {len(historical_episodes)} historical + {len(sim_episodes)} simulation episodes")
+        print(f"    Training batch: {len(today_episodes)} today + "
+              f"{len(recent_episodes)} recent + {len(replay_episodes)} replay "
+              f"= {total_transitions} transitions", flush=True)
 
-    # Train challenger
-    if verbose:
-        print("  Training challenger CQL model...")
-    challenger = train_cql(
-        episodes=all_episodes,
-        epochs=cql_epochs,
-        verbose=verbose,
-    )
+    # --- 4. Clone champion and do quick CQL update ---
+    challenger = ActorCriticCQL()
+    challenger.load_state_dict(copy.deepcopy(champion.state_dict()))
 
-    # Evaluate both models
+    if total_transitions > 10:
+        challenger = train_cql(
+            episodes=training_episodes,
+            agent=challenger,
+            epochs=cql_epochs,
+            batch_size=min(256, max(32, total_transitions // 4)),
+            verbose=False,
+        )
+
+    # --- 5. Evaluate champion vs challenger ---
     env = HEDISEnv(patient_snapshots, eligibility_snapshots)
 
-    if verbose:
-        print(f"  Evaluating champion ({eval_episodes} episodes)...")
     champion_metrics = evaluate_agent(champion, env, n_episodes=eval_episodes, seed=day * 1000)
-
-    if verbose:
-        print(f"  Evaluating challenger ({eval_episodes} episodes)...")
     challenger_metrics = evaluate_agent(challenger, env, n_episodes=eval_episodes, seed=day * 1000)
 
-    # Compare
     comparison = compare_models(champion_metrics, challenger_metrics)
 
     if verbose:
-        print(f"\n  Champion reward: {comparison['champion_mean_reward']:.4f}")
-        print(f"  Challenger reward: {comparison['challenger_mean_reward']:.4f}")
-        print(f"  Relative improvement: {comparison['relative_improvement']:.4f}")
-        print(f"  Promote: {comparison['promote_challenger']}")
+        print(f"    Champion: {comparison['champion_mean_reward']:.4f} | "
+              f"Challenger: {comparison['challenger_mean_reward']:.4f} | "
+              f"{'PROMOTE' if comparison['promote_challenger'] else 'retain'}", flush=True)
 
     # Save challenger checkpoint
     challenger_path = os.path.join(CHECKPOINTS_DIR, f"challenger_day_{day:02d}.pt")
     torch.save(challenger.state_dict(), challenger_path)
 
-    # Promote if better
     promoted = comparison["promote_challenger"]
     if promoted:
         champion_path = os.path.join(CHECKPOINTS_DIR, "champion.pt")
         torch.save(challenger.state_dict(), champion_path)
-        if verbose:
-            print(f"  Challenger PROMOTED to champion! Saved to {champion_path}")
         new_champion = challenger
     else:
         new_champion = champion
-        if verbose:
-            print("  Champion RETAINED.")
 
     # Save nightly metrics
     day_dir = os.path.join(SIMULATION_DATA_DIR, f"day_{day:02d}")
@@ -158,6 +197,8 @@ def run_nightly_cycle(
         "challenger_metrics": challenger_metrics,
         "comparison": comparison,
         "promoted": promoted,
+        "training_transitions": total_transitions,
+        "replay_episodes": len(replay_episodes),
     }
     with open(os.path.join(day_dir, "nightly_metrics.json"), "w") as f:
         json.dump(nightly_metrics, f, indent=2, default=str)

@@ -13,6 +13,7 @@ from config import (
     NUM_ACTIONS, STATE_DIM, HEDIS_MEASURES,
     MAX_CONTACTS_PER_WEEK, MIN_DAYS_BETWEEN_SAME_MEASURE,
     MEASURE_CATEGORIES, LAG_DISTRIBUTIONS,
+    FEAT_IDX_GAP_FLAGS_START,
 )
 from environment.action_space import decode_action, is_no_action, get_action_info
 from environment.state_space import snapshot_to_vector
@@ -236,7 +237,7 @@ class HEDISEnv(gym.Env):
                 budget_max=self._budget_max,
             )
             # Update gap flags in state vector
-            gap_start_idx = 24  # After demographics(6)+clinical(6)+conditions(8)+meds(4)
+            gap_start_idx = FEAT_IDX_GAP_FLAGS_START
             for i, m in enumerate(HEDIS_MEASURES):
                 self._state_vector[gap_start_idx + i] = 1.0 if m in self._open_gaps else 0.0
 

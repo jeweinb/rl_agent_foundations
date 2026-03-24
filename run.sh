@@ -44,6 +44,15 @@ header() { echo -e "\n${CYAN}━━━━━━━━━━━━━━━━━
 
 ensure_dirs() {
     mkdir -p "$PID_DIR" "$LOG_DIR" data/generated data/simulation training/checkpoints
+    # Auto-clean stale PID files on every invocation
+    for pidfile in "$PID_DIR"/*.pid; do
+        [[ -f "$pidfile" ]] || continue
+        local pid
+        pid=$(cat "$pidfile" 2>/dev/null)
+        if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+            rm -f "$pidfile"
+        fi
+    done
 }
 
 is_running() {
@@ -67,14 +76,12 @@ kill_process() {
         pid=$(cat "$pidfile")
         info "Stopping $name (PID $pid)..."
         kill "$pid" 2>/dev/null || true
-        # Wait up to 5 seconds for graceful shutdown
         for i in {1..10}; do
             if ! kill -0 "$pid" 2>/dev/null; then
                 break
             fi
             sleep 0.5
         done
-        # Force kill if still running
         if kill -0 "$pid" 2>/dev/null; then
             warn "Force-killing $name (PID $pid)"
             kill -9 "$pid" 2>/dev/null || true
@@ -190,9 +197,13 @@ cmd_dashboard() {
 cmd_simulate() {
     header "Starting Simulation"
 
-    # Check data exists
-    if [[ ! -f data/generated/state_features.json ]]; then
-        warn "No generated data found. Generating now..."
+    # Check data exists with enough patients
+    local count=0
+    if [[ -f data/generated/state_features.json ]]; then
+        count=$(python3 -c "import json; print(len(json.load(open('data/generated/state_features.json'))))" 2>/dev/null || echo "0")
+    fi
+    if (( count < 1000 )); then
+        warn "No data or insufficient patients ($count). Generating 5000..."
         cmd_generate
     fi
 
@@ -204,9 +215,9 @@ cmd_simulate() {
     rm -rf data/simulation/* training/checkpoints/*
     mkdir -p data/simulation training/checkpoints
 
-    info "Starting 30-day simulation..."
+    info "Starting 90-day simulation..."
     python3 -u scripts/run_simulation.py \
-        --days 30 --bc-epochs 30 --cql-epochs 20 --eval-episodes 100 \
+        --days 90 --bc-epochs 30 --cql-epochs 10 --eval-episodes 50 \
         > "$SIMULATION_LOG" 2>&1 &
     echo $! > "$SIMULATION_PID"
 
@@ -220,11 +231,23 @@ cmd_start() {
     # Stop everything first
     cmd_stop
 
-    # Generate data if needed
+    # Generate data if needed — also check it has enough patients (not a leftover test file)
+    local min_patients=1000
+    local need_gen=false
     if [[ ! -f data/generated/state_features.json ]]; then
-        cmd_generate
+        need_gen=true
     else
-        ok "Data already exists ($(wc -l < data/generated/state_features.json) lines)"
+        local count
+        count=$(python3 -c "import json; print(len(json.load(open('data/generated/state_features.json'))))" 2>/dev/null || echo "0")
+        if (( count < min_patients )); then
+            warn "Data exists but only has $count patients (need $min_patients+). Regenerating..."
+            need_gen=true
+        else
+            ok "Data exists with $count patients"
+        fi
+    fi
+    if $need_gen; then
+        cmd_generate
     fi
 
     # Start dashboard
@@ -243,7 +266,7 @@ cmd_start() {
     echo -e "  ${GREEN}Status${NC}:       ./run.sh status"
     echo ""
     info "Click the link above or open http://localhost:$DASHBOARD_PORT"
-    info "The simulation will take ~60-90 min for 30 days."
+    info "90-day simulation (~60-75 min). Watch STARS climb toward 4.0!"
 }
 
 cmd_restart() {

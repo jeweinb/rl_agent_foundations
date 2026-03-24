@@ -11,11 +11,7 @@ from datagen.constants import GAP_CLOSURE_BASE_RATES, GAP_REOPEN_RATES
 from config import HEDIS_MEASURES, MEASURE_CATEGORIES
 
 
-def _get_category(measure: str) -> str:
-    for cat, measures in MEASURE_CATEGORIES.items():
-        if measure in measures:
-            return cat
-    return "unknown"
+from config import get_measure_category
 
 
 CLOSURE_EVENT_TYPES = {

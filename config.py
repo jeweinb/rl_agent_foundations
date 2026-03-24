@@ -226,6 +226,43 @@ for a in ACTION_CATALOG:
     ACTION_IDS_BY_CHANNEL.setdefault(a.channel, []).append(a.action_id)
 
 # ---------------------------------------------------------------------------
+# Channel index mapping
+# ---------------------------------------------------------------------------
+CHANNEL_INDEX: Dict[str, int] = {ch: i for i, ch in enumerate(CHANNELS)}
+CHANNEL_INDEX["none"] = -1
+
+# ---------------------------------------------------------------------------
+# Measure category lookup
+# ---------------------------------------------------------------------------
+def get_measure_category(measure: str) -> str:
+    """Get the category for a HEDIS measure. Public utility used across modules."""
+    for cat, measures in MEASURE_CATEGORIES.items():
+        if measure in measures:
+            return cat
+    return "chronic"
+
+# ---------------------------------------------------------------------------
+# Best channel per measure category (learnable pattern in the simulation)
+# ---------------------------------------------------------------------------
+BEST_CHANNEL_BY_CATEGORY: Dict[str, str] = {
+    "screenings": "sms",
+    "vaccines": "sms",
+    "chronic": "app",
+    "medication_adherence": "app",
+    "mental_health": "portal",
+    "care_coordination": "ivr",
+}
+
+SECOND_BEST_CHANNEL_BY_CATEGORY: Dict[str, str] = {
+    "screenings": "email",
+    "vaccines": "email",
+    "chronic": "sms",
+    "medication_adherence": "sms",
+    "mental_health": "sms",
+    "care_coordination": "sms",
+}
+
+# ---------------------------------------------------------------------------
 # State Space
 # ---------------------------------------------------------------------------
 STATE_DIM = 96  # padded
@@ -234,9 +271,36 @@ STATE_DIM = 96  # padded
 # Cohort & Simulation
 # ---------------------------------------------------------------------------
 COHORT_SIZE = 5000
-SIMULATION_DAYS = 30
+SIMULATION_DAYS = 90
 MAX_CONTACTS_PER_WEEK = 3
 MIN_DAYS_BETWEEN_SAME_MEASURE = 7
+
+# ---------------------------------------------------------------------------
+# Feature vector index constants (for models that manipulate raw state vectors)
+# Layout: demographics(6) + clinical(6) + conditions(8) + meds(4) + gaps(18)
+#        + engagement(11) + risk(4) + budget(4) + temporal(3) + action_hist(10)
+#        + gap_specific(10) + padding
+# ---------------------------------------------------------------------------
+FEAT_IDX_GAP_FLAGS_START = 24   # 6+6+8+4
+FEAT_IDX_ENGAGEMENT_START = 42  # 24+18
+FEAT_IDX_RISK_START = 53        # 42+11
+FEAT_IDX_BUDGET_START = 57      # 53+4
+FEAT_IDX_TEMPORAL_START = 61    # 57+4
+
+# Normalization constants
+CONTACT_NORMALIZATION_MAX = 20
+DAYS_SINCE_NORMALIZATION_MAX = 90
+YEAR_DAYS = 365
+
+# ---------------------------------------------------------------------------
+# Gap closure probability factors (simulation world dynamics)
+# ---------------------------------------------------------------------------
+CLOSURE_BASE_MULTIPLIER = 0.04        # base_rate * this = daily closure prob
+CLOSURE_BEST_CHANNEL_FACTOR = 2.5     # Multiplied when using best channel for measure
+CLOSURE_CLICKED_FACTOR = 3.0          # Multiplied if patient clicked
+CLOSURE_OPENED_FACTOR = 1.5           # Multiplied if patient opened/viewed
+CLOSURE_DELIVERED_FACTOR = 1.1        # Multiplied if delivered
+CLOSURE_PROB_CAP = 0.5                # Maximum per-interaction closure probability
 
 # ---------------------------------------------------------------------------
 # Message Budget — global per-patient outreach budget
@@ -279,15 +343,15 @@ CQL_CONFIG = {
 # ---------------------------------------------------------------------------
 # Lag Distributions (days) per measure category
 # ---------------------------------------------------------------------------
-# Lag distributions for the simulation (calibrated so most rewards resolve
-# within a 30-day sim window). In production these would be longer.
+# Lag distributions (days between action and gap closure observation).
+# Calibrated for 90-day sim: most resolve within the quarter.
 LAG_DISTRIBUTIONS = {
-    "screenings": {"min": 3, "max": 14, "mean": 7},
-    "vaccines": {"min": 1, "max": 5, "mean": 2},
-    "chronic": {"min": 2, "max": 10, "mean": 5},
-    "medication_adherence": {"min": 3, "max": 12, "mean": 7},
-    "mental_health": {"min": 3, "max": 14, "mean": 7},
-    "care_coordination": {"min": 1, "max": 7, "mean": 3},
+    "screenings": {"min": 5, "max": 30, "mean": 14},      # Schedule + complete screening
+    "vaccines": {"min": 1, "max": 10, "mean": 3},          # Quick — walk-in pharmacy
+    "chronic": {"min": 5, "max": 25, "mean": 12},          # Lab results + follow-up
+    "medication_adherence": {"min": 7, "max": 35, "mean": 18},  # PDC measured over 30+ days
+    "mental_health": {"min": 7, "max": 30, "mean": 14},    # PHQ-9 reassessment
+    "care_coordination": {"min": 3, "max": 14, "mean": 7}, # Post-discharge follow-up
 }
 
 # ---------------------------------------------------------------------------

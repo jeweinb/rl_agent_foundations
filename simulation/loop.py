@@ -179,6 +179,8 @@ def run_simulation(
             "max": MESSAGE_BUDGET_PER_QUARTER,
             "total_sent": budget_used,
             "quarter_start_day": 1,
+            "contacts_this_week": 0,
+            "week_start_day": 1,
         }
 
     # Process warm-start lagged rewards that resolve immediately (day 0 schedule, short lag)
@@ -287,6 +289,8 @@ def run_simulation(
             model_version=model_version,
             action_distribution=day_results.get("action_distribution"),
             state_machine_funnel=day_results.get("state_machine_funnel"),
+            avg_budget_remaining=day_results.get("avg_budget_remaining"),
+            budget_exhausted_count=day_results.get("budget_exhausted_count", 0),
         )
 
         # Save cumulative metrics for dashboard

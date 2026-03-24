@@ -6,165 +6,405 @@ An offline reinforcement learning system that optimizes omnichannel patient outr
 
 Medicare Advantage health plans are rated on a 1–5 star scale by CMS based on quality measures (HEDIS). Plans scoring **≥ 4.0 stars** receive bonus payments worth millions in additional revenue. Closing care gaps — ensuring patients complete screenings, maintain medication adherence, manage chronic conditions — is the primary lever for improving STARS scores.
 
-Today, outreach is rule-based: static campaign schedules push the same messages regardless of patient context. This project replaces that with a **Conservative Q-Learning (CQL) agent** that learns an optimal outreach policy from historical data, respects real-world constraints (opt-outs, contact limits, channel availability), and continuously improves through nightly retraining.
+Today, outreach is rule-based: static campaign schedules push the same messages regardless of patient context. This project replaces that with a **Conservative Q-Learning (CQL) agent** that learns an optimal outreach policy from historical data, respects real-world constraints (opt-outs, contact limits, channel availability), and continuously improves through nightly Dyna-style incremental updates.
 
 ## Objective
 
 Train and deploy an RL agent that:
 
 1. **Selects the best action** (measure × channel × content variant) for each patient each day
-2. **Learns when to do nothing** — each patient has a finite message budget (12/quarter, 45/year); the agent learns to conserve messages for high-impact moments rather than exhausting the budget on low-value contacts
-3. **Respects eligibility constraints** — SMS consent, app install status, contact frequency limits, suppression rules, budget exhaustion
+2. **Learns when to do nothing** — each patient has a finite message budget (12/quarter, 45/year); the agent conserves messages for high-impact moments
+3. **Respects eligibility constraints** — SMS consent, app install status, contact frequency limits (3/week), suppression rules, budget exhaustion
 4. **Handles lagged rewards** — gap closures may occur weeks after outreach; a learned reward model bridges the delay
-5. **Improves nightly** — each night a challenger model is trained on all accumulated data and promoted if it outperforms the current champion
-6. **Targets STARS ≥ 4.0** — reward function weights triple-weighted measures (medication adherence) proportionally
+5. **Improves nightly** — Dyna-style updates mix fresh daily experiences with historical replay, champion/challenger evaluation gates promotions
+6. **Targets STARS ≥ 4.0** — CMS methodology: each measure gets an individual star rating from cut points, weighted average produces overall score
 
 ## Quick Start
 
 ```bash
-# Clone and install
-git clone <repo-url> && cd rl_agent_foundations
+# Install
 pip install -e ".[dev]"
 
-# Run everything (generates data, starts dashboard, runs 30-day simulation)
+# Run everything — generates data, starts dashboard, runs 90-day simulation
 ./run.sh
 
-# Or step by step:
-./run.sh generate    # Generate 5,000-patient mock dataset
-./run.sh dashboard   # Start dashboard on http://localhost:8050
-./run.sh simulate    # Run 30-day simulation
-
-# Management
-./run.sh status      # Check what's running + simulation progress
-./run.sh logs        # Tail simulation log
-./run.sh stop        # Stop all processes
-./run.sh restart     # Stop + fresh start
-./run.sh clean       # Wipe all data and stop
+# Open in your browser
+open http://localhost:8050
 ```
 
-Open **http://localhost:8050** to watch the simulation in real-time across 7 dashboard tabs.
+## `run.sh` Reference
 
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        30-Day Simulation Loop                       │
-│                                                                     │
-│   Day 0: Generate Data → BC Training → CQL Training → Deploy v1    │
-│                                                                     │
-│   Days 1–30:                                                        │
-│   ┌──────────────────────┐     ┌──────────────────────────────┐    │
-│   │      DAY PHASE       │     │        NIGHT PHASE           │    │
-│   │                      │     │                              │    │
-│   │  Agent selects       │     │  Aggregate all experience    │    │
-│   │  actions for 5,000   │────▶│  Train challenger CQL model  │    │
-│   │  patients             │     │  Evaluate champ vs chall     │    │
-│   │  State machine tracks │     │  Promote if >2% improvement  │    │
-│   │  action lifecycle     │     │  Log training metrics        │    │
-│   │  Lagged rewards queue │     │                              │    │
-│   └──────────────────────┘     └──────────────────────────────┘    │
-│          │                                    │                     │
-│          ▼                                    ▼                     │
-│   ┌──────────────────────────────────────────────────────────┐     │
-│   │              data/simulation/day_XX/                      │     │
-│   │   actions_taken.json · experience_buffer.json             │     │
-│   │   state_machine.json · nightly_metrics.json               │     │
-│   └──────────────────────────────────────────────────────────┘     │
-│                              │                                      │
-│                              ▼                                      │
-│                    ┌───────────────────┐                            │
-│                    │  Plotly Dash App  │                            │
-│                    │  localhost:8050   │                            │
-│                    │  7 tabs, 5s poll  │                            │
-│                    └───────────────────┘                            │
-└─────────────────────────────────────────────────────────────────────┘
+```bash
+./run.sh                 # Full start (same as ./run.sh start)
+./run.sh start           # Stop existing → generate data if needed → start dashboard + simulation
+./run.sh stop            # Gracefully stop all processes (auto-cleans stale PIDs)
+./run.sh restart         # Stop + fresh start
+./run.sh status          # Show what's running, current STARS score, simulation day
+./run.sh dashboard       # Start only the dashboard
+./run.sh simulate        # Start only the simulation (data must exist)
+./run.sh generate        # Generate 5,000-patient mock dataset
+./run.sh logs            # tail -f the simulation log
+./run.sh clean           # Stop everything + wipe all generated data
 ```
 
-## HEDIS Measures (18 Part C Measures)
+## Script Entry Points
 
-| Category | Measures | STARS Weight |
-|----------|----------|:---:|
-| Screenings | COL (Colorectal), BCS (Breast Cancer), EED (Eye Exam — Diabetes) | 1× |
-| Vaccines | FVA (Tdap), FVO (Pneumococcal), AIS (Zoster), FLU (Influenza) | 1× |
-| Chronic Management | CBP (Blood Pressure), BPD (BP — Diabetes), HBD (A1C Control), KED (Kidney) | 1× |
-| Medication Adherence | MAC (Statins), MRA (RAS Antagonists), MDS (Diabetes Oral) | **3×** |
-| Mental Health | DSF (Depression Screening), DRR (Depression Remission), DMC02 (Antidepressants) | 1× (DMC02 = 3×) |
-| Care Coordination | TRC_M (Medication Reconciliation Post-Discharge) | 3× |
+Each script in `scripts/` can be run standalone with arguments:
 
-Triple-weighted measures (MAC, MRA, MDS, DMC02, TRC_M) have 3× impact on the STARS score and receive 3× the gap closure reward.
+```bash
+# Data generation
+python scripts/generate_data.py --cohort-size 5000 --seed 42
+
+# Train world models (dynamics + reward)
+python scripts/train_world_models.py --epochs 50 --batch-size 256
+
+# Train the RL agent (BC warm-start → Actor-Critic CQL)
+python scripts/train_agent.py --bc-epochs 50 --cql-epochs 100
+python scripts/train_agent.py --skip-bc --cql-epochs 100    # Skip BC if checkpoint exists
+
+# Run simulation
+python scripts/run_simulation.py --days 90 --bc-epochs 30 --cql-epochs 10 --eval-episodes 50
+python scripts/run_simulation.py --days 5 --bc-epochs 5 --cql-epochs 3 --eval-episodes 10  # Quick test
+
+# Start dashboard
+python scripts/run_dashboard.py --port 8050 --debug
+
+# Run test suite (212 tests)
+python -m pytest tests/ -v
+python -m pytest tests/test_training.py -v     # Just training tests
+python -m pytest tests/ -x --tb=short          # Stop on first failure
+```
+
+## Using the Model Programmatically
+
+### Train on Your Own Data
+
+```python
+from training.data_loader import build_offline_episodes
+from training.behavior_cloning import train_behavior_cloning
+from training.cql_trainer import train_cql
+
+# Your data must be lists of dicts matching these schemas (see "Input Data Format" below)
+import json
+with open("your_state_features.json") as f:
+    state_features = json.load(f)
+with open("your_historical_activity.json") as f:
+    historical_activity = json.load(f)
+with open("your_action_eligibility.json") as f:
+    action_eligibility = json.load(f)
+
+# Convert to offline RL episodes
+episodes = build_offline_episodes(state_features, historical_activity, action_eligibility)
+
+# Phase 1: Behavior Cloning (learn from what the business was doing)
+bc_policy = train_behavior_cloning(episodes=episodes, epochs=50)
+
+# Phase 2: Actor-Critic CQL (improve on the behavioral policy)
+agent = train_cql(episodes=episodes, bc_policy=bc_policy, epochs=100)
+
+# Save
+import torch
+torch.save(agent.state_dict(), "my_agent.pt")
+```
+
+### Load and Use a Trained Agent
+
+```python
+import numpy as np
+from training.cql_trainer import ActorCriticCQL
+from environment.state_space import snapshot_to_vector
+from environment.action_masking import compute_action_mask
+from environment.action_space import decode_action
+import torch
+
+# Load trained agent
+agent = ActorCriticCQL()
+agent.load_state_dict(torch.load("training/checkpoints/champion.pt", weights_only=True))
+
+# Build patient state vector from your data
+patient = {
+    "demographics": {"age": 72, "sex": "F", "zip3": "331", "dual_eligible": False,
+                     "lis_status": False, "snp_flag": False},
+    "clinical": {"bp_systolic_last": 142, "bp_diastolic_last": 88, "a1c_last": 8.2,
+                 "bmi": 31.4, "ckd_stage": 2, "phq9_score": 6,
+                 "conditions": {"diabetes": True, "hypertension": True, "hyperlipidemia": True,
+                                "depression": False, "ckd": True, "chd": False, "copd": False, "chf": False}},
+    "medication_fill_rates": {"statin": 0.82, "ace_arb": 0.91, "diabetes_oral": 0.75, "antidepressant": 0.0},
+    "open_gaps": ["COL", "EED", "CBP", "MDS"],
+    "closed_gaps": ["BCS", "FLU", "FVA"],
+    "engagement": {"sms_consent": True, "email_available": True, "portal_registered": True,
+                   "app_installed": False, "preferred_channel": "sms",
+                   "total_contacts_90d": 5, "sms_response_rate": 0.6, "email_open_rate": 0.3,
+                   "portal_engagement_rate": 0.4, "app_engagement_rate": 0.0,
+                   "ivr_completion_rate": 0.15, "last_contact_date": "2026-03-01",
+                   "days_since_last_contact": 14},
+    "risk_scores": {"readmission_risk": 0.12, "disenrollment_risk": 0.05,
+                    "non_compliance_risk": 0.35, "composite_acuity": 2.8},
+}
+
+state_vec = snapshot_to_vector(patient, budget_remaining=8, budget_max=12)
+
+# Compute action mask
+mask = compute_action_mask(
+    open_gaps=set(patient["open_gaps"]),
+    channel_availability={"sms": True, "email": True, "portal": True, "app": False, "ivr": True},
+    budget_remaining=8,
+)
+
+# Get the agent's recommended action
+action_id = agent.get_action_greedy(state_vec, mask.astype(np.float32))
+action = decode_action(action_id)
+print(f"Recommended: {action.measure} via {action.channel} — {action.variant}")
+# → e.g., "Recommended: MDS via sms — refill_reminder"
+```
+
+### Inspect Q-Values for All Valid Actions
+
+```python
+import torch
+
+# Get Q-values from the twin critics (conservative = min of both)
+agent.critic.eval()
+with torch.no_grad():
+    state_t = torch.FloatTensor(state_vec).unsqueeze(0)
+    q_min = agent.critic.q_min(state_t).squeeze()
+
+# Show top actions by Q-value
+from config import ACTION_BY_ID
+valid_indices = np.where(mask)[0]
+q_valid = [(int(i), float(q_min[i]), ACTION_BY_ID[i]) for i in valid_indices if i > 0]
+q_valid.sort(key=lambda x: x[1], reverse=True)
+
+for idx, qval, act in q_valid[:10]:
+    print(f"  Q={qval:+.4f}  {act.measure} | {act.channel} | {act.variant}")
+```
+
+### Evaluate a Model on the Gym Environment
+
+```python
+from training.evaluation import evaluate_agent
+from environment.hedis_env import HEDISEnv
+
+env = HEDISEnv(state_features, action_eligibility)
+metrics = evaluate_agent(agent, env, n_episodes=500)
+print(f"Mean reward: {metrics['mean_reward']:.4f}")
+print(f"Gaps closed: {metrics['mean_gaps_closed']:.1f}")
+print(f"No-action rate: {metrics['no_action_rate']:.1%}")
+```
+
+### Run the Gym Environment for Model Evaluation
+
+```python
+import json
+import numpy as np
+from environment.hedis_env import HEDISEnv
+from training.cql_trainer import ActorCriticCQL
+from training.evaluation import evaluate_agent
+import torch
+
+# Load data and model
+with open("data/generated/state_features.json") as f:
+    patients = json.load(f)
+with open("data/generated/action_eligibility.json") as f:
+    eligibility = json.load(f)
+
+agent = ActorCriticCQL()
+agent.load_state_dict(torch.load("training/checkpoints/champion.pt", weights_only=True))
+
+# Create environment
+env = HEDISEnv(patients, eligibility, max_steps_per_episode=30)
+
+# Option 1: Quick evaluation across many episodes
+metrics = evaluate_agent(agent, env, n_episodes=500, seed=42)
+print(f"Mean reward:     {metrics['mean_reward']:.4f}")
+print(f"Std reward:      {metrics['std_reward']:.4f}")
+print(f"Gaps closed/ep:  {metrics['mean_gaps_closed']:.1f}")
+print(f"No-action rate:  {metrics['no_action_rate']:.1%}")
+print(f"Avg ep length:   {metrics['mean_episode_length']:.0f}")
+
+# Option 2: Manual rollout to inspect agent behavior step by step
+obs, info = env.reset(seed=42, options={"patient_idx": 0, "day_of_year": 100})
+print(f"\nPatient: {info['patient_id']}, Open gaps: {info['open_gaps']}")
+
+done = False
+while not done:
+    state = obs["observations"]
+    mask = obs["action_mask"]
+    action_id = agent.get_action_greedy(state, mask.astype(np.float32))
+
+    obs, reward, terminated, truncated, info = env.step(action_id)
+    done = terminated or truncated
+
+    if info["measure"]:
+        print(f"  Day {info['day_of_year']}: {info['measure']} via {info['channel']} "
+              f"→ {'CLICKED' if info['clicked'] else 'delivered' if info['delivered'] else 'sent'} "
+              f"(r={reward:+.3f}, gaps_left={len(info['open_gaps'])}, "
+              f"budget={info['budget_remaining']})")
+    else:
+        print(f"  Day {info['day_of_year']}: no_action (r={reward:+.3f})")
+
+print(f"\nEpisode reward: {info['episode_reward']:.3f}")
+```
+
+### Compare Two Models (Champion vs Challenger)
+
+```python
+from training.evaluation import evaluate_agent, compare_models
+
+champion_metrics = evaluate_agent(champion_agent, env, n_episodes=200, seed=42)
+challenger_metrics = evaluate_agent(challenger_agent, env, n_episodes=200, seed=42)
+
+result = compare_models(champion_metrics, challenger_metrics, improvement_threshold=0.02)
+print(f"Champion:   {result['champion_mean_reward']:.4f}")
+print(f"Challenger: {result['challenger_mean_reward']:.4f}")
+print(f"Improve:    {result['relative_improvement']:.1%}")
+print(f"Promote:    {result['promote_challenger']}")
+```
+
+## Input Data Format
+
+To train on your own data, prepare four JSON files matching these schemas:
+
+### `state_features.json` — Patient Snapshots
+
+```json
+[
+  {
+    "patient_id": "P10042",
+    "demographics": {"age": 72, "sex": "F", "zip3": "331", "dual_eligible": false,
+                     "lis_status": false, "snp_flag": false},
+    "clinical": {"bp_systolic_last": 142.0, "bp_diastolic_last": 88.0, "a1c_last": 8.2,
+                 "bmi": 31.4, "ckd_stage": 2, "phq9_score": 6,
+                 "conditions": {"diabetes": true, "hypertension": true, "hyperlipidemia": true,
+                                "depression": false, "ckd": true, "chd": false, "copd": false, "chf": false}},
+    "medication_fill_rates": {"statin": 0.82, "ace_arb": 0.91, "diabetes_oral": 0.75, "antidepressant": 0.0},
+    "open_gaps": ["COL", "EED", "CBP", "MDS"],
+    "closed_gaps": ["BCS", "FLU"],
+    "engagement": {"sms_consent": true, "email_available": true, "portal_registered": false,
+                   "app_installed": false, "preferred_channel": "sms", "total_contacts_90d": 5,
+                   "sms_response_rate": 0.6, "email_open_rate": 0.3, "portal_engagement_rate": 0.0,
+                   "app_engagement_rate": 0.0, "ivr_completion_rate": 0.15,
+                   "last_contact_date": "2026-03-01", "days_since_last_contact": 14},
+    "risk_scores": {"readmission_risk": 0.12, "disenrollment_risk": 0.05,
+                    "non_compliance_risk": 0.35, "composite_acuity": 2.8}
+  }
+]
+```
+
+### `historical_activity.json` — Past Outreach Records
+
+```json
+[
+  {
+    "record_id": "act_000001",
+    "patient_id": "P10042",
+    "date": "2025-03-15",
+    "action_id": 5,
+    "measure": "COL",
+    "channel": "sms",
+    "variant": "scheduling_link",
+    "outcome": {
+      "delivered": true,
+      "opened": true,
+      "clicked": false,
+      "gap_closed_within_30d": false,
+      "gap_closed_within_90d": true,
+      "days_to_closure": 47
+    },
+    "context": {
+      "prior_attempts_this_measure": 2,
+      "days_since_last_contact": 14,
+      "member_tenure_months": 36
+    }
+  }
+]
+```
+
+The `action_id` must match an entry in the action catalog (see `config.py`). The `outcome` fields provide the reward signal for BC and CQL training.
+
+### `action_eligibility.json` — Constraint Snapshots
+
+```json
+[
+  {
+    "patient_id": "P10042",
+    "snapshot_date": "2026-01-15",
+    "action_mask": [true, true, false, true, ...],
+    "global_constraints": {
+      "opt_out": false,
+      "grievance_hold": false,
+      "suppression_active": false,
+      "max_contacts_per_week": 3,
+      "contacts_this_week": 1
+    },
+    "eligible_measures": ["COL", "EED", "CBP", "MDS"]
+  }
+]
+```
+
+The `action_mask` is a boolean array of length 125 (one per action). Index 0 (`no_action`) must always be `true`.
+
+## HEDIS Measures & CMS STARS Methodology
+
+### 18 Part C Measures
+
+| Measure | Description | CMS Weight | 4★ Cut Point |
+|---------|-------------|:---:|:---:|
+| COL | Colorectal Cancer Screening | 1 | 70% |
+| BCS | Breast Cancer Screening | 3 | 78% |
+| EED | Eye Exam for Diabetics | 3 | 75% |
+| FVA | Adult Immunization — Tdap | 1 | 55% |
+| FVO | Pneumococcal Vaccination | 1 | 65% |
+| AIS | Adult Immunization — Zoster | 1 | 45% |
+| FLU | Influenza Vaccination | 1 | 73% |
+| CBP | Controlling Blood Pressure | 3 | 78% |
+| BPD | BP Control for Diabetics | 3 | 72% |
+| HBD | A1C Control for Diabetics | 3 | 84% |
+| KED | Kidney Health Evaluation | 1 | 62% |
+| MAC | Medication Adherence — Statins | 3 | 89% |
+| MRA | Medication Adherence — RAS Antagonists | 3 | 89% |
+| MDS | Medication Adherence — Diabetes | 3 | 87% |
+| DSF | Depression Screening & Follow-Up | 1 | 65% |
+| DRR | Depression Remission/Response | 1 | 40% |
+| DMC02 | Antidepressant Medication Management | 3 | 65% |
+| TRC_M | Transitions of Care — Med Reconciliation | 1 | 60% |
+
+### STARS Calculation (CMS Methodology)
+
+1. Each measure's performance rate is converted to an individual 1–5 star rating using measure-specific cut points
+2. The overall rating is the **weighted average** of individual measure stars
+3. Weights: Outcome/Intermediate Outcome = 3, Process/New = 1
 
 ## Action Space (125 Curated Actions)
 
-Each action is a realistic **(measure, channel, content_variant)** tuple — not a full combinatorial explosion. Only sensible combinations are included.
+Each action is a realistic **(measure, channel, content_variant)** tuple. 5 channels × 18 measures with curated variants, plus no_action.
 
-**5 Channels:** SMS, Email, Web Portal, Mobile App, IVR
-
-**Example actions by category:**
-
-| Category | Channel | Variant | Example Message |
-|----------|---------|---------|-----------------|
-| Screening | SMS | `scheduling_link` | "Book your colonoscopy — tap here to schedule" |
-| Screening | SMS | `incentive_offer` | "$50 reward when you complete your screening" |
+| Category | Channel | Variant | Example |
+|----------|---------|---------|---------|
+| Screening | SMS | `scheduling_link` | "Book your colonoscopy — tap here" |
+| Screening | SMS | `incentive_offer` | "$50 reward when you complete screening" |
 | Vaccine | SMS | `pharmacy_locator` | "Get your flu shot free at CVS near you" |
 | Med Adherence | SMS | `refill_reminder` | "Time to refill your statin — tap to order" |
 | Med Adherence | App | `adherence_gamification` | Streak tracker + reward milestones |
-| Chronic Mgmt | SMS | `home_device_offer` | "Free BP monitor — reply YES to enroll" |
-| Mental Health | SMS | `telehealth_link` | "Talk to a therapist today — free virtual visit" |
-| Care Transition | IVR | `care_navigator` | Automated call with live transfer to transition nurse |
+| Chronic Mgmt | SMS | `home_device_offer` | "Free BP monitor — reply YES" |
+| Mental Health | Portal | `screening_tool` | In-portal PHQ-9 questionnaire |
+| Care Transition | IVR | `care_navigator` | Automated call → live transfer to nurse |
 
-Plus **1 no-action** (index 0) — the agent can choose not to contact a patient.
-
-Action index 0 is always valid. All other actions are subject to eligibility constraints (action masking).
-
-## State Space (96 Features)
-
-The patient state vector is constructed from clinical, behavioral, and temporal features:
-
-| Block | Features | Dims |
-|-------|----------|:---:|
-| Demographics | age, sex, zip3, dual-eligible, LIS, SNP | 6 |
-| Clinical Vitals | BP systolic/diastolic, A1C, BMI, CKD stage, PHQ-9 | 6 |
-| Condition Flags | diabetes, hypertension, hyperlipidemia, depression, CKD, CHD, COPD, CHF | 8 |
-| Medication Fill Rates | statin PDC, ACE/ARB PDC, diabetes oral PDC, antidepressant PDC | 4 |
-| Open Gap Flags | one binary flag per HEDIS measure | 18 |
-| Engagement | channel consent (4), response rates (5), contact count, days since contact | 11 |
-| Risk Scores | readmission, disenrollment, non-compliance, composite acuity | 4 |
-| Temporal | day-of-year (sin/cos), days remaining in measurement year | 3 |
-| Action History | last 5 actions encoded as (measure_idx, channel_idx) | 10 |
-| Gap-Specific | per open gap: days since last attempt, attempt count (top 5) | 10 |
-| **Padding** | | **26** |
-| **Total** | | **96** |
-
-All features are normalized to roughly [0, 1]. The full vector is padded to 96 dimensions for tensor alignment.
-
-## Reward Function
-
-```
-R(s, a) = gap_closure_reward × measure_weight     (1× or 3× for triple-weighted)
-         + 0.05 × delivered + 0.10 × clicked       (immediate engagement signals)
-         − 0.01                                     (action cost — prevents spam)
-         − 0.05 × fatigue_factor                    (contact frequency penalty)
-```
-
-**Lagged rewards:** Gap closure is heavily delayed (weeks to months). A learned reward model predicts `P(gap_closure | state, action, days_elapsed)` to provide training signal before the actual outcome is observed. When the real gap closure arrives, it retroactively updates the training data.
+Action 0 is always `no_action` — the agent can choose strategic silence.
 
 ## Model Architecture — Actor-Critic CQL
 
-The agent uses **Conservative Q-Learning with a Soft Actor-Critic backbone**:
-
 ```
 ┌──────────────────────┐
-│        Actor          │   Policy network: π(a|s)
-│  96 → 256 → 256 → 125│   Outputs action probabilities with masking
-│  + Action Masking     │   Invalid actions get P = 0
+│        Actor          │   Policy: π(a|s) with action masking
+│  96 → 256 → 256 → 125│   Masked softmax → invalid actions get P = 0
 └──────────┬───────────┘
            │
            ▼
 ┌──────────────────────┐   ┌──────────────────────┐
 │     Critic Q1         │   │     Critic Q2         │   Twin Q-Networks
-│  96 → 256 → 256 → 125│   │  96 → 256 → 256 → 125│   Conservative estimate:
-└──────────┬───────────┘   └──────────┬───────────┘   Q = min(Q1, Q2)
-           │                          │
+│  96 → 256 → 256 → 125│   │  96 → 256 → 256 → 125│   Q = min(Q1, Q2)
+└──────────┬───────────┘   └──────────┬───────────┘
            └──────────┬───────────────┘
                       ▼
               CQL Penalty:
@@ -173,75 +413,19 @@ The agent uses **Conservative Q-Learning with a Soft Actor-Critic backbone**:
 ```
 
 **Training pipeline:**
-1. **Behavior Cloning** — initialize the actor from historical outreach data (what the business was doing)
-2. **CQL Fine-Tuning** — conservative offline RL that improves on the behavioral policy without overestimating Q-values for unseen actions
-3. **Nightly Retraining** — each simulated night, a challenger is trained on all accumulated data and promoted if it beats the champion by ≥ 2%
-
-**Why CQL?** Standard Q-learning overestimates Q-values for out-of-distribution actions — dangerous in healthcare where we cannot experiment freely. CQL adds a penalty that keeps Q-values conservative, ensuring the learned policy stays close to the data distribution while still improving.
-
-## Action Masking & Constraints
-
-Not every action is valid for every patient. The action mask is a boolean vector of size 125 that enforces:
-
-| Constraint | Effect |
-|-----------|--------|
-| Gap not open | All actions for that measure are blocked |
-| No SMS consent | All SMS actions blocked |
-| App not installed | All app actions blocked |
-| Portal not registered | All portal actions blocked |
-| Opt-out | Only no-action available |
-| Grievance hold | Only no-action available |
-| Suppression active | Only no-action available |
-| Contact limit reached (3/week) | Only no-action available |
-| Same-measure cooldown (7 days) | Actions for that measure blocked |
-
-The mask is applied in both the actor (masked softmax) and critics (masked Q-values, CQL penalty only on valid actions).
+1. **Behavior Cloning** — initialize actor from historical outreach data
+2. **CQL Fine-Tuning** — conservative offline RL with SAC backbone + twin critics
+3. **Nightly Dyna Updates** — fresh daily experience + 5% historical replay + recent 3 days, quick 5-epoch update, champion/challenger evaluation
 
 ## Message Budget & Strategic Silence
 
-Each patient has a **finite message budget** that creates a fundamental tension: every message spent on a low-value contact is one fewer message available when it really matters.
-
-```
-┌─────────────────────────────────────────────────┐
-│  Patient P10042 — Quarter 1 Budget              │
-│                                                 │
-│  ████████████░░░░  9/12 remaining (75%)         │
-│  Status: NORMAL                                 │
-│                                                 │
-│  Quarter 2 resets to 12                         │
-│  Annual cap: 45 messages                        │
-└─────────────────────────────────────────────────┘
-```
-
-**Budget parameters:**
-- **12 messages per quarter** (90-day rolling window with replenishment)
-- **45 messages per year** (hard annual cap)
-- **Warning at < 25%** remaining — agent penalized for messages that don't produce clicks
-- **Critical at < 10%** remaining — heavy penalty for any non-essential message
-- **Exhausted at 0** — all actions masked, only no_action available until next quarter
-
-**How the agent learns strategic silence:**
-
-1. **Budget in the state vector** — 4 features: `budget_remaining_norm`, `budget_utilization_rate`, `budget_is_warning`, `budget_is_critical`. The agent sees its remaining budget and learns to plan ahead.
-
-2. **Budget-aware reward shaping:**
-   - No-action gets a **positive reward** when budget is below 25% (conservation bonus of +0.02)
-   - Messages that don't produce clicks get a **waste penalty** (-0.08) when budget is below 25%
-   - Any message when budget is below 10% gets a **critical penalty** (-0.15) — only send if gap closure is very likely
-   - Gap closure reward (+1.0 to +3.0) always dominates — but the agent learns that a well-timed message at 5% budget that closes a gap is worth far more than 5 wasted messages earlier
-
-3. **Budget exhaustion as hard constraint** — when budget hits 0, action masking forces no_action. The agent cannot reach patients who need it. This creates a long-horizon planning problem: the agent must balance exploration (sending messages to learn what works) against exploitation (saving budget for patients most likely to respond).
-
-This design naturally produces behavior where the agent:
-- **Sends fewer, higher-quality messages** — targeting patients with high response probability
-- **Prioritizes triple-weighted measures** (MAC, MRA, MDS) when budget is scarce
-- **Avoids re-contacting** patients who haven't responded to prior outreach
-- **Times messages** to when engagement signals suggest the patient is receptive
-- **Preserves budget** for late-year urgency when approaching measurement year end
+Each patient has **12 messages per quarter**. The agent sees budget as 4 state features and learns:
+- **Budget > 50%** — act normally
+- **Budget < 25%** — penalized for messages that don't produce clicks (waste penalty)
+- **Budget < 10%** — heavy penalty for any message (save for emergencies)
+- **Budget = 0** — all actions masked, only no_action available
 
 ## Action Lifecycle State Machine
-
-An external process tracks each action through its lifecycle:
 
 ```
 CREATED → QUEUED → PRESENTED → VIEWED → ACCEPTED → COMPLETED
@@ -249,253 +433,128 @@ CREATED → QUEUED → PRESENTED → VIEWED → ACCEPTED → COMPLETED
                    ↘ FAILED
 ```
 
-State transitions feed back into:
-- **Engagement signals** → immediate reward (delivered, opened, clicked)
-- **Eligibility updates** → pending actions block re-sends for the same measure
-- **Dashboard** → action lifecycle funnel visualization
+Channel-specific transition probabilities (e.g., SMS: 95% delivery, 82% open; IVR: 70% delivery, 20% acceptance). Feeds engagement signals to reward computation and eligibility constraints.
 
 ## Dashboard (7 Tabs)
 
 | Tab | Content |
 |-----|---------|
-| **STARS Overview** | Gauge chart (target 4.0), score trajectory, cumulative reward curve, regret curve, per-measure closure table |
-| **Real-Time Actions** | Live scrolling feed of actions taken, distribution by channel/measure, action vs no-action ratio |
-| **Training Performance** | Champion vs challenger scores per day, model version timeline, promotion history |
-| **Measure Deep Dive** | Select a HEDIS measure → closure trend, channel effectiveness, patient funnel (sent → delivered → viewed → clicked) |
-| **Patient Journey** | Search by patient ID → full timeline of every action, engagement outcomes, cumulative reward curve, gap status |
-| **Action Lifecycle** | State machine funnel, per-channel conversion rates, recent state transitions, terminal state distribution |
-| **Logs** | Real-time simulation log stream with level filtering (PHASE, METRIC, INFO, ERROR) |
+| **STARS Overview** | Gauge, trajectory, cumulative reward, regret curve, gap closure heatmap, per-measure table with CMS cut points + progress bars |
+| **Real-Time Actions** | Action leaderboard (toggle Q-value / acceptance / completion ranking), global budget gauge, channel/measure distributions |
+| **Training** | Champion vs challenger scores, model version timeline, promotion history |
+| **Measures** | Channel × measure effectiveness heatmap, per-measure closure trend with 4★/5★ cut point lines, lifecycle funnel |
+| **Patient Journey** | Interactive action cards with channel icons + disposition (👍/👁️/📬/👎), budget bar, cumulative reward |
+| **Action Lifecycle** | Sankey flow diagram, cumulative funnel, per-channel conversion rates |
+| **Logs** | Real-time simulation log stream with level filtering |
 
-The dashboard polls `data/simulation/` JSON files every 5 seconds via `dcc.Interval`.
-
-## Running Individual Modules
-
-### Data Generation
+## Tests
 
 ```bash
-# Generate all 4 mock datasets (5,000 patients)
-python scripts/generate_data.py --cohort-size 5000 --seed 42
+python -m pytest tests/ -v                    # Full suite (212 tests)
+python -m pytest tests/test_datagen.py -v     # Data schema + clinical range validation
+python -m pytest tests/test_environment.py -v # Action masking, OOD, reward, gym env
+python -m pytest tests/test_training.py -v    # BC, CQL actor-critic, twin critics, eval
+python -m pytest tests/test_simulation.py -v  # Daily/nightly cycles, state machine, metrics
+python -m pytest tests/test_integration.py -v # End-to-end, world models, edge cases
 ```
-
-Produces:
-- `data/generated/state_features.json` — patient state snapshots (demographics, clinical, engagement, risk)
-- `data/generated/historical_activity.json` — 50,000 historical outreach records with outcomes
-- `data/generated/gap_closure.json` — longitudinal gap closure timelines per patient per measure
-- `data/generated/action_eligibility.json` — per-patient action masks with constraint reasons
-
-### World Model Training
-
-```bash
-# Train dynamics model (predicts next state) and reward model (predicts gap closure probability)
-python scripts/train_world_models.py --epochs 50 --batch-size 256
-```
-
-Saves to `training/checkpoints/dynamics_model.pt` and `reward_model.pt`.
-
-### Agent Training
-
-```bash
-# Train BC → CQL pipeline
-python scripts/train_agent.py --bc-epochs 50 --cql-epochs 100
-
-# Skip BC if checkpoint exists
-python scripts/train_agent.py --skip-bc --cql-epochs 100
-```
-
-Saves to `training/checkpoints/bc_policy.pt` and `cql_agent.pt`.
-
-### Simulation
-
-```bash
-# Run 30-day simulation (includes BC + CQL training on Day 0)
-python scripts/run_simulation.py --days 30 --bc-epochs 30 --cql-epochs 20 --eval-episodes 100
-
-# Quick test run
-python scripts/run_simulation.py --days 3 --bc-epochs 5 --cql-epochs 5 --eval-episodes 20
-```
-
-### Dashboard
-
-```bash
-# Start on default port 8050
-python scripts/run_dashboard.py
-
-# Custom port with debug mode
-python scripts/run_dashboard.py --port 8080 --debug
-```
-
-### Tests
-
-```bash
-# Run full test suite (212 tests)
-python -m pytest tests/ -v
-
-# Run specific test modules
-python -m pytest tests/test_datagen.py -v        # Data generation + schema validation
-python -m pytest tests/test_environment.py -v     # Env, masking, reward, gym
-python -m pytest tests/test_training.py -v        # BC, CQL, evaluation
-python -m pytest tests/test_simulation.py -v      # Daily/nightly cycles, state machine, metrics
-python -m pytest tests/test_integration.py -v     # End-to-end, world models, edge cases
-```
-
-## Four Mock Datasets
-
-| Dataset | Records | Purpose |
-|---------|:---:|---------|
-| **Historical Activity** | 50,000 | Past outreach actions + outcomes. Used for behavior cloning warm-start. Each record has action taken, delivery/engagement outcome, and lagged gap closure result. |
-| **State Features** | 5,000 | Patient state snapshots. Demographics, clinical indicators (BP, A1C, medication fill rates), engagement history, risk scores. Flattened to 96-dim vectors. |
-| **Gap Closure** | ~50,000 | Monthly timeline per patient per measure showing when gaps open/close. Used to train the reward model. |
-| **Action Eligibility** | 5,000 | Per-patient action masks with constraint reasons. Encodes SMS consent, app install, opt-out, contact limits, and gap status. |
 
 ## Dependencies
 
 ```
-gymnasium>=0.29.0
-torch>=2.0.0
-numpy>=1.24.0
-pandas>=2.0.0
-plotly>=5.18.0
-dash>=2.14.0
-scipy>=1.11.0
-scikit-learn>=1.3.0
+gymnasium>=0.29.0    torch>=2.0.0     numpy>=1.24.0
+pandas>=2.0.0        plotly>=5.18.0   dash>=2.14.0
+scipy>=1.11.0        scikit-learn>=1.3.0
 ```
 
-## Deep Dive: Project Structure
+## System Architecture
 
 ```
-rl_agent_foundations/
-│
-├── run.sh                           # One-command launcher (start/stop/restart/status/clean)
-├── config.py                        # Central configuration
-│                                    #   - 18 HEDIS measures with descriptions and weights
-│                                    #   - 125 curated actions (Action namedtuple catalog)
-│                                    #   - Lookup indices: ACTION_BY_ID, ACTION_IDS_BY_MEASURE
-│                                    #   - State dim, cohort size, simulation days
-│                                    #   - Reward weights, CQL hyperparams, lag distributions
-│                                    #   - World model configs, dashboard settings, file paths
-│
-├── datagen/                         # Mock data generation
-│   ├── constants.py                 #   Clinical ranges (BP, A1C, BMI, PHQ-9 distributions)
-│   │                                #   Demographics (age, sex, ZIP3, condition prevalence)
-│   │                                #   Channel rates (delivery, open, click per channel)
-│   │                                #   Gap closure base rates, outreach lift factors
-│   ├── patients.py                  #   Generate patient profiles with age-adjusted conditions
-│   ├── state_features.py            #   Build clinical snapshots with condition-specific gaps
-│   │                                #   Enforces: BCS female-only, diabetes measures need dx, etc.
-│   ├── historical_activity.py       #   Simulate behavioral policy outreach with realistic
-│   │                                #   engagement funnels and lagged gap closure outcomes
-│   ├── gap_closure.py               #   Monthly timelines with urgency-adjusted closure rates
-│   │                                #   and medication adherence gap reopening
-│   ├── action_eligibility.py        #   Constraint-based masking: consent, install, opt-out,
-│   │                                #   contact limits, gap status, per-action suppression
-│   └── generator.py                 #   Orchestrates all generators, writes JSON to data/generated/
-│
-├── environment/                     # Gymnasium environment
-│   ├── action_space.py              #   Encode/decode 125 actions ↔ (measure, channel, variant)
-│   ├── state_space.py               #   Flatten patient dicts → 96-dim float32 vectors
-│   │                                #   Normalized features, sin/cos temporal encoding
-│   ├── action_masking.py            #   Compute boolean masks from gaps, channels, constraints
-│   │                                #   Handles: opt-out, grievance, suppression, contact limit,
-│   │                                #   channel unavailability, same-measure cooldown
-│   ├── reward.py                    #   Composite reward: gap closure (weighted) + engagement
-│   │                                #   + action cost + fatigue penalty
-│   │                                #   compute_stars_score(): weighted avg → 1-5 star mapping
-│   └── hedis_env.py                 #   Full gymnasium.Env with Dict observation space
-│                                    #   Supports pluggable dynamics/reward models
-│                                    #   Used for champion vs challenger evaluation
-│
-├── models/                          # PyTorch world models
-│   ├── dynamics_model.py            #   s' = s + f_θ(s, embed(a)) + ε
-│   │                                #   Embedding(125, 32) → MLP(128→256→256→96)
-│   │                                #   Predicts state deltas with learned variance
-│   ├── reward_model.py              #   P(closure | s, a, days) via sigmoid MLP
-│   │                                #   Embedding(125, 32) → MLP(129→128→64→1)
-│   │                                #   Binary cross-entropy on gap closure labels
-│   ├── train_dynamics.py            #   Build (s, a, s') transitions from historical data
-│   │                                #   Gaussian NLL loss, gradient clipping
-│   └── train_reward.py              #   Build (s, a, days, closed) from activity + gap data
-│                                    #   Multi-horizon samples (30d, 90d, actual closure day)
-│
-├── training/                        # RL training pipeline
-│   ├── data_loader.py               #   JSON datasets → offline RL episodes
-│   │                                #   Builds (obs, action, reward, mask) sequences per patient
-│   │                                #   Also exports to RLlib JSON-lines format
-│   ├── behavior_cloning.py          #   ActionMaskedPolicy: MLP with masked softmax
-│   │                                #   Cross-entropy loss on historical actions
-│   │                                #   Provides warm-start for CQL actor
-│   ├── cql_trainer.py               #   Actor-Critic CQL (SAC backbone)
-│   │                                #   Actor: masked softmax policy π(a|s)
-│   │                                #   TwinCritic: Q1, Q2 with q_min = min(Q1, Q2)
-│   │                                #   CQL loss: LogSumExp(Q_valid) − Q(s, a_data)
-│   │                                #   Auto-tuned entropy coefficient α
-│   │                                #   Soft target network updates (τ = 0.005)
-│   └── evaluation.py               #   Run agent on env for N episodes
-│                                    #   Compare champion vs challenger with improvement threshold
-│
-├── simulation/                      # 30-day simulation engine
-│   ├── loop.py                      #   Main orchestrator: Day 0 init → daily/nightly loop
-│   │                                #   Writes cumulative_metrics.json for dashboard
-│   ├── daily_cycle.py               #   Agent selects actions for all patients
-│   │                                #   Feeds state machine, schedules lagged rewards
-│   │                                #   Writes actions_taken.json, experience_buffer.json
-│   ├── nightly_cycle.py             #   Trains challenger CQL on historical + simulation data
-│   │                                #   Evaluates both models, promotes if better
-│   │                                #   Writes nightly_metrics.json
-│   ├── lagged_rewards.py            #   LaggedRewardQueue: schedule closure at future day
-│   │                                #   Measure-specific lag distributions (vaccines ~5d,
-│   │                                #   screenings ~30d, medication adherence ~60d)
-│   ├── action_state_machine.py      #   ActionLifecycleTracker: CREATED→QUEUED→PRESENTED→
-│   │                                #   VIEWED→ACCEPTED/DECLINED→COMPLETED/FAILED/EXPIRED
-│   │                                #   Channel-specific transition probabilities
-│   │                                #   Feeds engagement signals + eligibility updates
-│   ├── metrics.py                   #   MetricsTracker: STARS scores, cumulative reward,
-│   │                                #   regret curves, per-measure closure rates
-│   └── logger.py                    #   Structured JSONL logger for dashboard Logs tab
-│
-├── dashboard/                       # Plotly Dash real-time monitoring
-│   ├── app.py                       #   Dash entry point, 7 tabs, 5s polling interval
-│   ├── callbacks.py                 #   All callback functions for real-time chart updates
-│   ├── data_feed.py                 #   Reads simulation JSONs, patient journey queries
-│   └── layouts/
-│       ├── overview.py              #   STARS gauge, trajectory, reward curve, measure table
-│       ├── realtime.py              #   Live action feed, channel/measure distributions
-│       ├── training.py              #   Champion vs challenger, model version timeline
-│       ├── measures.py              #   Per-measure closure trend, channel effectiveness, funnel
-│       ├── patient_journey.py       #   Individual patient timeline, action history, reward curve
-│       ├── state_machine.py         #   Lifecycle funnel, conversion rates, transitions table
-│       └── logs.py                  #   Real-time simulation log stream with level filtering
-│
-├── scripts/                         # CLI entry points
-│   ├── generate_data.py             #   python scripts/generate_data.py --cohort-size 5000
-│   ├── train_world_models.py        #   python scripts/train_world_models.py --epochs 50
-│   ├── train_agent.py               #   python scripts/train_agent.py --bc-epochs 50 --cql-epochs 100
-│   ├── run_simulation.py            #   python scripts/run_simulation.py --days 30
-│   └── run_dashboard.py             #   python scripts/run_dashboard.py --port 8050
-│
-├── tests/                           # 212 tests
-│   ├── conftest.py                  #   Shared fixtures (small patient cohort, all 4 datasets)
-│   ├── test_datagen.py              #   Schema validation, clinical ranges, cross-dataset consistency
-│   ├── test_environment.py          #   Action masking, OOD actions, reward, gym env behavior
-│   ├── test_training.py             #   BC, actor-critic CQL, twin critics, evaluation
-│   ├── test_simulation.py           #   Daily/nightly cycles, state machine, metrics, output formats
-│   └── test_integration.py          #   E2E pipeline, world models, edge cases, dashboard data formats
-│
-├── data/
-│   ├── generated/                   #   Mock datasets (gitignored)
-│   └── simulation/                  #   Per-day simulation outputs (gitignored)
-│       ├── cumulative_metrics.json  #     Dashboard reads this for all charts
-│       ├── simulation_log.jsonl     #     Structured log for Logs tab
-│       └── day_XX/
-│           ├── actions_taken.json   #     Every action selected for every patient
-│           ├── experience_buffer.json #   (obs, action, reward, mask) for retraining
-│           ├── state_machine.json   #     Action lifecycle records
-│           └── nightly_metrics.json #     Champion vs challenger evaluation
-│
-├── logs/                            #   Process logs from run.sh
-│   ├── simulation.log
-│   └── dashboard.log
-│
-├── .pids/                           #   PID files for run.sh process management
-├── pyproject.toml                   #   Project metadata and dependencies
-└── .gitignore                       #   Excludes data/, checkpoints/, logs/, .pids/
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                              CONFIGURATION (config.py)                               │
+│  18 HEDIS measures + weights + CMS cut points · 125 action catalog                  │
+│  Channel mappings · Feature indices · Reward weights · CQL hyperparams              │
+│  Budget params · Lag distributions · Closure probability factors                     │
+└──────┬──────────────┬───────────────┬───────────────┬──────────────┬────────────────┘
+       │              │               │               │              │
+       ▼              ▼               ▼               ▼              ▼
+┌─────────────┐ ┌───────────┐ ┌─────────────┐ ┌───────────┐ ┌──────────────┐
+│  DATA GEN   │ │ENVIRONMENT│ │  TRAINING   │ │  MODELS   │ │  SIMULATION  │
+│  datagen/   │ │environment│ │  training/  │ │  models/  │ │  simulation/ │
+├─────────────┤ ├───────────┤ ├─────────────┤ ├───────────┤ ├──────────────┤
+│patients.py  │ │action_    │ │data_loader  │ │dynamics_  │ │loop.py       │
+│state_       │ │  space.py │ │  .py        │ │  model.py │ │  orchestrator│
+│  features.py│ │state_     │ │behavior_    │ │reward_    │ │daily_cycle   │
+│historical_  │ │  space.py │ │  cloning.py │ │  model.py │ │  .py         │
+│  activity.py│ │action_    │ │cql_trainer  │ │train_     │ │nightly_cycle │
+│gap_closure  │ │  masking  │ │  .py        │ │  dynamics │ │  .py         │
+│  .py        │ │  .py      │ │evaluation   │ │  .py      │ │lagged_       │
+│action_      │ │reward.py  │ │  .py        │ │train_     │ │  rewards.py  │
+│  eligibility│ │hedis_env  │ │             │ │  reward   │ │action_state_ │
+│  .py        │ │  .py      │ │             │ │  .py      │ │  machine.py  │
+│generator.py │ │           │ │             │ │           │ │metrics.py    │
+│             │ │           │ │             │ │           │ │logger.py     │
+└──────┬──────┘ └─────┬─────┘ └──────┬──────┘ └─────┬─────┘ └───────┬──────┘
+       │              │              │               │               │
+       ▼              │              │               │               │
+  ┌─────────┐         │              │               │               │
+  │  JSON   │         │              │               │               │
+  │  DATA   │◄────────┼──────────────┼───────────────┘               │
+  │  STORE  │         │              │                               │
+  ├─────────┤         │              │     ┌────────────────┐        │
+  │generated│         │              ├────▶│  PyTorch       │        │
+  │ ├ state_│         │              │     │  Checkpoints   │        │
+  │ │ feats │◄────────┤              │     │ ├ bc_policy.pt │        │
+  │ ├ histor│         │              │     │ ├ champion.pt  │◄───────┤
+  │ │ ical  │────────▶│              │     │ └ challenger_  │        │
+  │ ├ gap_  │         │    ┌─────────┤     │   day_XX.pt   │        │
+  │ │ closur│         │    │         │     └────────────────┘        │
+  │ └ eligib│         │    │         │                               │
+  │         │         │    │         │                               │
+  │simulat° │         │    │         │                               │
+  │ ├ cumul_│◄────────┼────┼─────────┼───────────────────────────────┤
+  │ │ metric│         │    │         │                               │
+  │ ├ sm_   │         │    │         │                               │
+  │ │ cumul │         │    │         │                               │
+  │ ├ day_XX│         │    │         │                               │
+  │ │├action│         │    │         │                               │
+  │ │├experi│         │    │         │                               │
+  │ │├sm.jsn│         │    │         │                               │
+  │ │└night_│         │    │         │                               │
+  │ └ log.  │         │    │         │                               │
+  │   jsonl │         │    │         │                               │
+  └────┬────┘         │    │         │                               │
+       │              │    │         │                               │
+       ▼              │    │         │                               │
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │                        DASHBOARD (dashboard/)                       │
+  │                        Plotly Dash · localhost:8050                  │
+  ├─────────────────────────────────────────────────────────────────────┤
+  │  theme.py · styles.py · data_feed.py · callbacks.py · app.py       │
+  │                                                                     │
+  │  ┌──────────┬──────────┬──────────┬──────────┬─────────┬─────────┐ │
+  │  │ STARS    │ Actions  │Training  │Measures  │Patient  │Action   │ │
+  │  │ Overview │ Realtime │Performnce│Deep Dive │Journey  │Lifecycl │ │
+  │  │          │          │          │          │         │+ Logs   │ │
+  │  │ Gauge    │Leaderbd  │Champ vs  │Ch×Meas   │Action   │Sankey   │ │
+  │  │ Traject  │(Q-val /  │Challenger│Heatmap   │Cards    │Funnel   │ │
+  │  │ Heatmap  │ accept / │Model ver │Closure   │Budget   │Conversi │ │
+  │  │ Measure  │ complete)│Promotion │Trend     │Bar      │Recent   │ │
+  │  │ Table    │Budget    │History   │Funnel    │Reward   │Transiti │ │
+  │  │ w/ CMS   │Gauge     │          │          │Curve    │         │ │
+  │  │ cutpoint │Channel   │          │          │         │         │ │
+  │  │ progress │distribtn │          │          │         │         │ │
+  │  └──────────┴──────────┴──────────┴──────────┴─────────┴─────────┘ │
+  │                                                                     │
+  │  Polls data/simulation/ every 5 seconds via dcc.Interval            │
+  └─────────────────────────────────────────────────────────────────────┘
+
+Data Flow:
+  datagen/ ──generates──▶ data/generated/ (JSON)
+  data/generated/ ──loaded by──▶ training/ (builds episodes)
+  training/ ──produces──▶ checkpoints/ (PyTorch .pt files)
+  simulation/loop.py ──orchestrates──▶ daily_cycle + nightly_cycle
+  daily_cycle ──writes──▶ data/simulation/day_XX/ (JSON per day)
+  nightly_cycle ──reads checkpoints, writes new──▶ checkpoints/
+  dashboard/ ──reads──▶ data/simulation/ (5s polling)
+  dashboard/ ──reads──▶ checkpoints/ (for Q-value leaderboard)
 ```

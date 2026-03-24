@@ -8,20 +8,14 @@ import plotly.express as px
 from collections import Counter
 
 from config import HEDIS_MEASURES, MEASURE_DESCRIPTIONS, MEASURE_WEIGHTS, STARS_BONUS_THRESHOLD
-
-# --- Humana Brand Colors ---
-HUMANA_GREEN = "#00A664"
-HUMANA_DARK_GREEN = "#007A4D"
-NAVY = "#1B2A4A"
-NAVY_LIGHT = "#2D4263"
-GRAY_BG = "#F5F6F8"
-GRAY_BORDER = "#E2E8F0"
-WHITE = "#FFFFFF"
-
-# Chart template
-CHART_TEMPLATE = "plotly_white"
-CHART_FONT = dict(family="Inter, sans-serif", size=12, color=NAVY)
-CHART_MARGIN = dict(l=48, r=16, t=48, b=40)
+from dashboard.theme import (
+    HUMANA_GREEN, HUMANA_DARK_GREEN, NAVY, NAVY_LIGHT,
+    GRAY_BG, GRAY_BORDER, WHITE, GRAY_TEXT,
+    STATUS_SUCCESS, STATUS_SUCCESS_BG, STATUS_WARNING, STATUS_WARNING_BG,
+    STATUS_ERROR, STATUS_ERROR_BG, STATE_COLORS,
+    CHART_TEMPLATE, CHART_FONT, CHART_MARGIN,
+    CHANNEL_COLORS, CHANNEL_BG_COLORS, CHANNEL_ICONS,
+)
 
 def _styled_fig(fig):
     """Apply consistent styling to all charts."""
@@ -85,7 +79,8 @@ def register_callbacks(app):
             value=stars_score,
             title={"text": "Projected STARS Score", "font": {"size": 16, "color": NAVY}},
             delta={"reference": STARS_BONUS_THRESHOLD, "increasing": {"color": HUMANA_GREEN},
-                   "prefix": "", "suffix": " to bonus", "valueformat": "+.1f"},
+                   "suffix": " to 4★", "valueformat": "+.2f"},
+            number={"valueformat": ".2f"},
             gauge={
                 "axis": {"range": [1, 5], "tickwidth": 2, "tickcolor": NAVY},
                 "bar": {"color": HUMANA_GREEN},
@@ -253,14 +248,16 @@ def register_callbacks(app):
     # Tab 2: Real-Time Actions
     # =========================================================================
     @app.callback(
-        [Output("cohort-bubble", "figure"),
+        [Output("global-budget-gauge", "children"),
+         Output("action-leaderboard", "figure"),
          Output("recent-actions-table", "children"),
          Output("action-by-channel", "figure"),
          Output("action-by-measure", "figure"),
          Output("action-vs-noaction", "figure")],
-        Input("interval-component", "n_intervals"),
+        [Input("interval-component", "n_intervals"),
+         Input("leaderboard-rank-by", "value")],
     )
-    def update_realtime(_):
+    def update_realtime(_, rank_by):
         actions = load_all_actions()
 
         # Recent actions table (last 50)
@@ -315,55 +312,154 @@ def register_callbacks(app):
         else:
             pie = go.Figure()
 
-        # --- Animated Bubble Chart: Patient cohort activity ---
-        if actions:
-            # Aggregate per-patient stats from latest day
-            from collections import defaultdict
-            patient_stats = defaultdict(lambda: {"actions": 0, "reward": 0, "measures": set(), "channels": set()})
-            for a in actions:
-                pid = a.get("patient_id", "")
-                if a.get("action_id", 0) != 0:
-                    patient_stats[pid]["actions"] += 1
-                    patient_stats[pid]["reward"] += a.get("reward", 0)
-                    if a.get("measure"):
-                        patient_stats[pid]["measures"].add(a["measure"])
-                    if a.get("channel"):
-                        patient_stats[pid]["channels"].add(a["channel"])
+        # --- Global Budget Gauge ---
+        budget_gauge = html.P("Waiting for budget data...", style={"color": GRAY_TEXT})
+        metrics = load_cumulative_metrics()
+        if metrics:
+            latest = metrics[-1]
+            # Budget info comes from daily cycle results
+            avg_budget = latest.get("avg_budget_remaining")
+            exhausted = latest.get("budget_exhausted_count", 0)
+            from config import MESSAGE_BUDGET_PER_QUARTER, COHORT_SIZE
+            if avg_budget is not None:
+                avg_pct = avg_budget / max(MESSAGE_BUDGET_PER_QUARTER, 1) * 100
+                bar_color = HUMANA_GREEN if avg_pct > 50 else ("#f59e0b" if avg_pct > 25 else "#ef4444")
+                budget_gauge = html.Div([
+                    html.Div([
+                        html.Div([
+                            html.Span(f"{avg_budget:.1f}", style={"fontSize": "28px", "fontWeight": "700", "color": NAVY}),
+                            html.Span(f" / {MESSAGE_BUDGET_PER_QUARTER} avg remaining", style={"fontSize": "14px", "color": GRAY_TEXT}),
+                        ]),
+                        html.Div([
+                            html.Span(f"{exhausted:,}", style={"fontSize": "28px", "fontWeight": "700", "color": "#ef4444"}),
+                            html.Span(f" patients exhausted", style={"fontSize": "14px", "color": GRAY_TEXT}),
+                        ]),
+                    ], style={"display": "flex", "gap": "60px", "marginBottom": "10px"}),
+                    html.Div([
+                        html.Div(style={
+                            "width": f"{100-avg_pct:.0f}%", "height": "14px",
+                            "backgroundColor": "#94a3b8",
+                        }),
+                        html.Div(style={
+                            "width": f"{avg_pct:.0f}%", "height": "14px",
+                            "backgroundColor": bar_color,
+                        }),
+                    ], style={"display": "flex", "borderRadius": "7px", "overflow": "hidden",
+                             "border": f"1px solid {GRAY_BORDER}"}),
+                ])
 
-            # Sample up to 200 patients for visualization
-            sampled = list(patient_stats.items())[:200]
-            if sampled:
-                import random
-                bubble = go.Figure()
-                colors = [HUMANA_GREEN, NAVY, "#ff7f0e", "#d62728", "#9467bd", "#8c564b"]
-                for i, (pid, stats) in enumerate(sampled):
-                    primary_measure = list(stats["measures"])[0] if stats["measures"] else "none"
-                    bubble.add_trace(go.Scatter(
-                        x=[stats["actions"] + random.gauss(0, 0.3)],
-                        y=[stats["reward"]],
-                        mode="markers",
-                        marker=dict(
-                            size=max(8, min(stats["actions"] * 4, 30)),
-                            color=colors[hash(primary_measure) % len(colors)],
-                            opacity=0.6,
-                            line=dict(width=1, color="white"),
-                        ),
-                        text=f"{pid}: {stats['actions']} actions, reward={stats['reward']:.2f}",
-                        hoverinfo="text",
-                        showlegend=False,
+        # --- Action Leaderboard with ranking toggle ---
+        if not rank_by:
+            rank_by = "q_value"
+
+        sm_data = load_all_state_machine_data()
+
+        if rank_by == "q_value":
+            # Use the trained model's Q-values to rank actions
+            import torch
+            import numpy as np
+            from config import NUM_ACTIONS, STATE_DIM, CHECKPOINTS_DIR, ACTION_BY_ID
+            import os
+
+            champion_path = os.path.join(CHECKPOINTS_DIR, "champion.pt")
+            if os.path.exists(champion_path):
+                from training.cql_trainer import ActorCriticCQL
+                agent = ActorCriticCQL()
+                try:
+                    agent.load_state_dict(torch.load(champion_path, weights_only=True))
+                except Exception:
+                    agent = ActorCriticCQL()
+
+                # Get average Q-value per action across a sample of states
+                agent.critic.eval()
+                with torch.no_grad():
+                    # Use random states as a representative sample
+                    sample_states = torch.randn(100, STATE_DIM)
+                    q_min = agent.critic.q_min(sample_states)  # (100, NUM_ACTIONS)
+                    avg_q = q_min.mean(dim=0).numpy()  # (NUM_ACTIONS,)
+
+                # Build leaderboard from Q-values
+                action_data = []
+                for aid in range(1, NUM_ACTIONS):  # Skip no_action
+                    act = ACTION_BY_ID.get(aid)
+                    if act:
+                        label = f"{act.measure} | {act.channel.upper()} | {act.variant.replace('_', ' ').title()}"
+                        action_data.append((label, float(avg_q[aid]), act.measure))
+
+                action_data.sort(key=lambda x: x[1], reverse=True)
+                top = action_data[:20]
+
+                if top:
+                    labels = [t[0] for t in top]
+                    values = [t[1] for t in top]
+                    colors = [HUMANA_GREEN if v > 0 else "#94a3b8" for v in values]
+
+                    leaderboard = go.Figure(go.Bar(
+                        y=labels, x=values, orientation="h",
+                        marker_color=colors,
+                        text=[f"{v:.3f}" for v in values],
+                        textposition="outside",
                     ))
-                _styled_fig(bubble)
-                bubble.update_layout(
-                    title="Patient Activity Distribution",
-                    xaxis_title="Total Actions", yaxis_title="Cumulative Reward",
+                    _styled_fig(leaderboard)
+                    leaderboard.update_layout(
+                        title="Top 20 Actions by Q-Value (Model's Predicted Future Reward)",
+                        xaxis_title="Average Q-Value",
+                        yaxis=dict(autorange="reversed"),
+                    )
+                else:
+                    leaderboard = _empty_fig("No model checkpoint found")
+            else:
+                leaderboard = _empty_fig("Model not yet trained — Q-values unavailable")
+
+        elif sm_data:
+            # Rank by acceptance or completion from state machine
+            from collections import defaultdict
+            action_perf = defaultdict(lambda: {"total": 0, "accepted": 0, "completed": 0})
+            for r in sm_data:
+                label = f"{r.get('measure', '?')} | {r.get('channel', '?').upper()} | {r.get('variant', '?').replace('_', ' ').title()}"
+                state = r.get("current_state", "")
+                action_perf[label]["total"] += 1
+                if state in ("ACCEPTED", "COMPLETED"):
+                    action_perf[label]["accepted"] += 1
+                if state == "COMPLETED":
+                    action_perf[label]["completed"] += 1
+
+            qualified = {k: v for k, v in action_perf.items() if v["total"] >= 3}
+            if qualified:
+                metric_key = "completed" if rank_by == "completion" else "accepted"
+                metric_label = "Completion Rate" if rank_by == "completion" else "Acceptance Rate"
+
+                sorted_actions = sorted(qualified.items(),
+                                       key=lambda x: x[1][metric_key] / max(x[1]["total"], 1),
+                                       reverse=True)[:20]
+                labels = [k for k, _ in sorted_actions]
+                rates = [v[metric_key] / max(v["total"], 1) for _, v in sorted_actions]
+                hover = [
+                    f"{k}<br>Accepted: {v['accepted']}/{v['total']} ({v['accepted']/max(v['total'],1):.0%})"
+                    f"<br>Completed: {v['completed']}/{v['total']} ({v['completed']/max(v['total'],1):.0%})"
+                    for k, v in sorted_actions
+                ]
+                colors = [HUMANA_GREEN if r > 0.10 else (NAVY if r > 0.03 else "#94a3b8") for r in rates]
+
+                leaderboard = go.Figure(go.Bar(
+                    y=labels, x=rates, orientation="h",
+                    marker_color=colors,
+                    text=[f"{r:.0%}" for r in rates],
+                    textposition="outside",
+                    hovertext=hover, hoverinfo="text",
+                ))
+                _styled_fig(leaderboard)
+                leaderboard.update_layout(
+                    title=f"Top 20 Actions by {metric_label}",
+                    xaxis_title=metric_label,
+                    yaxis=dict(autorange="reversed"),
                 )
             else:
-                bubble = go.Figure()
-                _styled_fig(bubble)
+                leaderboard = _empty_fig("Not enough data for leaderboard...")
         else:
-            bubble = _empty_fig("Patient Cohort Activity — waiting for data...")
+            leaderboard = _empty_fig("Action Leaderboard — waiting for data...")
 
-        return bubble, table, ch_fig, m_fig, pie
+        return budget_gauge, leaderboard, table, ch_fig, m_fig, pie
 
     # =========================================================================
     # Tab 3: Training Performance
@@ -433,28 +529,30 @@ def register_callbacks(app):
         Input("interval-component", "n_intervals"),
     )
     def update_chord(_):
-        actions = load_all_actions()
-        if not actions:
+        # Use state machine data for accurate lifecycle stats (not stale action records)
+        sm_data = load_all_state_machine_data()
+        if not sm_data:
             fig = _empty_fig("Channel × Measure Effectiveness — waiting for data...")
             return fig
 
-        # Build channel × measure click rate matrix
         from config import CHANNELS
         from collections import defaultdict
-        counts = defaultdict(lambda: {"total": 0, "clicked": 0})
-        for a in actions:
-            if a.get("action_id", 0) == 0:
-                continue
-            ch = a.get("channel", "unknown")
-            m = a.get("measure", "unknown")
-            eng = a.get("engagement", {})
-            key = (ch, m)
-            counts[key]["total"] += 1
-            if eng.get("clicked"):
-                counts[key]["clicked"] += 1
 
-        # Get measures that actually appear
-        active_measures = sorted(set(a.get("measure") for a in actions if a.get("action_id", 0) != 0 and a.get("measure")))
+        # Count acceptance rate per channel × measure from state machine
+        counts = defaultdict(lambda: {"total": 0, "accepted": 0, "completed": 0, "viewed": 0})
+        for r in sm_data:
+            ch = r.get("channel", "unknown")
+            m = r.get("measure", "unknown")
+            state = r.get("current_state", "")
+            counts[(ch, m)]["total"] += 1
+            if state in ("VIEWED", "ACCEPTED", "COMPLETED", "DECLINED"):
+                counts[(ch, m)]["viewed"] += 1
+            if state in ("ACCEPTED", "COMPLETED"):
+                counts[(ch, m)]["accepted"] += 1
+            if state == "COMPLETED":
+                counts[(ch, m)]["completed"] += 1
+
+        active_measures = sorted(set(r.get("measure") for r in sm_data if r.get("measure")))
         if not active_measures:
             active_measures = HEDIS_MEASURES[:6]
         active_channels = [c for c in CHANNELS if any(counts[(c, m)]["total"] > 0 for m in active_measures)]
@@ -468,9 +566,15 @@ def register_callbacks(app):
             text_row = []
             for m in active_measures:
                 c = counts[(ch, m)]
-                rate = c["clicked"] / max(c["total"], 1)
+                rate = c["accepted"] / max(c["total"], 1)
                 row.append(rate)
-                text_row.append(f"{ch}×{m}<br>Click rate: {rate:.1%}<br>Total: {c['total']}")
+                text_row.append(
+                    f"{ch.upper()} × {m}<br>"
+                    f"Acceptance: {rate:.1%}<br>"
+                    f"Viewed: {c['viewed']}/{c['total']}<br>"
+                    f"Accepted: {c['accepted']}/{c['total']}<br>"
+                    f"Completed: {c['completed']}/{c['total']}"
+                )
             z.append(row)
             text.append(text_row)
 
@@ -502,61 +606,83 @@ def register_callbacks(app):
         if not selected_measure:
             selected_measure = "COL"
 
-        # Closure trend for selected measure
+        # Closure trend for selected measure with actual CMS cut points
+        from config import MEASURE_CUT_POINTS
+        cuts = MEASURE_CUT_POINTS.get(selected_measure, {})
+        cut_4star = cuts.get(4, 0.70)
+        cut_5star = cuts.get(5, 0.85)
+
         if metrics:
             days = [m["day"] for m in metrics]
             rates = [m.get("measure_closure_rates", {}).get(selected_measure, 0) for m in metrics]
             trend = go.Figure()
-            trend.add_trace(go.Scatter(x=days, y=rates, mode="lines+markers", name="Closure Rate"))
-            trend.add_hline(y=0.68, line_dash="dash", line_color="green", annotation_text="4-Star Cut Point")
+            trend.add_trace(go.Scatter(x=days, y=rates, mode="lines+markers", name="Closure Rate",
+                                       line=dict(color=HUMANA_GREEN, width=3),
+                                       marker=dict(size=6)))
+            trend.add_hline(y=cut_4star, line_dash="dash", line_color="#f59e0b",
+                          annotation_text=f"4★ ({cut_4star:.0%})")
+            trend.add_hline(y=cut_5star, line_dash="dot", line_color=HUMANA_GREEN,
+                          annotation_text=f"5★ ({cut_5star:.0%})")
+            _styled_fig(trend)
             trend.update_layout(
-                title=f"{selected_measure} Gap Closure Rate",
+                title=f"{selected_measure} — {MEASURE_DESCRIPTIONS.get(selected_measure, '')}",
                 xaxis_title="Day", yaxis_title="Closure Rate",
-                yaxis=dict(range=[0, 1]), margin=dict(l=40, r=20, t=50, b=40),
+                yaxis=dict(range=[0, 1]),
             )
         else:
-            trend = go.Figure()
+            trend = _empty_fig(f"{selected_measure} — waiting for data...")
 
-        # Channel effectiveness for this measure
-        measure_actions = [a for a in actions if a.get("measure") == selected_measure and a.get("action_id", 0) != 0]
-        if measure_actions:
-            channel_engagement = {}
-            for a in measure_actions:
-                ch = a.get("channel", "unknown")
-                eng = a.get("engagement", {})
-                if ch not in channel_engagement:
-                    channel_engagement[ch] = {"total": 0, "delivered": 0, "opened": 0, "clicked": 0}
-                channel_engagement[ch]["total"] += 1
-                if eng.get("delivered"):
-                    channel_engagement[ch]["delivered"] += 1
-                if eng.get("opened"):
-                    channel_engagement[ch]["opened"] += 1
-                if eng.get("clicked"):
-                    channel_engagement[ch]["clicked"] += 1
+        # Channel effectiveness and funnel — use state machine data for accurate lifecycle
+        sm_data = load_all_state_machine_data()
+        measure_sm = [r for r in sm_data if r.get("measure") == selected_measure]
 
-            channels = list(channel_engagement.keys())
-            click_rates = [channel_engagement[c]["clicked"] / max(channel_engagement[c]["total"], 1) for c in channels]
-            eff = go.Figure(go.Bar(x=channels, y=click_rates))
-            eff.update_layout(title=f"Channel Click Rate for {selected_measure}",
-                            yaxis_title="Click Rate", margin=dict(l=40, r=20, t=50, b=40))
-        else:
-            eff = go.Figure()
-            eff.update_layout(title=f"Channel Effectiveness for {selected_measure} (no data)")
+        if measure_sm:
+            # Channel effectiveness from state machine terminal states
+            from collections import defaultdict
+            ch_stats = defaultdict(lambda: {"total": 0, "completed": 0, "accepted": 0, "viewed": 0, "presented": 0})
+            for r in measure_sm:
+                ch = r.get("channel", "unknown")
+                state = r.get("current_state", "")
+                ch_stats[ch]["total"] += 1
+                if state in ("PRESENTED", "VIEWED", "ACCEPTED", "COMPLETED", "DECLINED"):
+                    ch_stats[ch]["presented"] += 1
+                if state in ("VIEWED", "ACCEPTED", "COMPLETED", "DECLINED"):
+                    ch_stats[ch]["viewed"] += 1
+                if state in ("ACCEPTED", "COMPLETED"):
+                    ch_stats[ch]["accepted"] += 1
+                if state == "COMPLETED":
+                    ch_stats[ch]["completed"] += 1
 
-        # Funnel
-        if measure_actions:
-            total = len(measure_actions)
-            delivered = sum(1 for a in measure_actions if a.get("engagement", {}).get("delivered"))
-            opened = sum(1 for a in measure_actions if a.get("engagement", {}).get("opened"))
-            clicked = sum(1 for a in measure_actions if a.get("engagement", {}).get("clicked"))
-            funnel = go.Figure(go.Funnel(
-                y=["Sent", "Delivered", "Viewed", "Clicked"],
-                x=[total, delivered, opened, clicked],
+            channels = sorted(ch_stats.keys())
+            accept_rates = [ch_stats[c]["accepted"] / max(ch_stats[c]["total"], 1) for c in channels]
+            eff = go.Figure(go.Bar(
+                x=[c.upper() for c in channels], y=accept_rates,
+                marker_color=HUMANA_GREEN,
             ))
-            funnel.update_layout(title=f"Patient Funnel: {selected_measure}",
-                               margin=dict(l=40, r=20, t=50, b=40))
+            _styled_fig(eff)
+            eff.update_layout(title=f"Channel Acceptance Rate — {selected_measure}",
+                            yaxis_title="Acceptance Rate")
         else:
-            funnel = go.Figure()
+            eff = _empty_fig(f"Channel Effectiveness — {selected_measure} (no data)")
+
+        # Funnel from state machine
+        if measure_sm:
+            from collections import Counter
+            state_counts = Counter(r.get("current_state") for r in measure_sm)
+            total = len(measure_sm)
+            presented = sum(state_counts.get(s, 0) for s in ["PRESENTED", "VIEWED", "ACCEPTED", "COMPLETED", "DECLINED"])
+            viewed = sum(state_counts.get(s, 0) for s in ["VIEWED", "ACCEPTED", "COMPLETED", "DECLINED"])
+            accepted = sum(state_counts.get(s, 0) for s in ["ACCEPTED", "COMPLETED"])
+            completed = state_counts.get("COMPLETED", 0)
+            funnel = go.Figure(go.Funnel(
+                y=["Created", "Presented", "Viewed", "Accepted", "Completed"],
+                x=[total, presented, viewed, accepted, completed],
+                marker=dict(color=[NAVY, "#3b82f6", "#8b5cf6", HUMANA_GREEN, "#15803d"]),
+            ))
+            _styled_fig(funnel)
+            funnel.update_layout(title=f"Action Lifecycle Funnel — {selected_measure}")
+        else:
+            funnel = _empty_fig(f"Funnel — {selected_measure} (no data)")
 
         return trend, eff, funnel
 
@@ -610,24 +736,56 @@ def register_callbacks(app):
         latest = journey[-1] if journey else {}
         budget_rem = latest.get("budget_remaining", 12)
         budget_max = latest.get("budget_max", 12)
-        budget_pct = (budget_rem / max(budget_max, 1)) * 100
-        budget_color = "#4caf50" if budget_pct > 50 else ("#ff9800" if budget_pct > 25 else "#f44336")
+        budget_used = budget_max - budget_rem
+        budget_pct = max(0, (budget_rem / max(budget_max, 1)) * 100)
+        used_pct = 100 - budget_pct
+
+        if budget_rem == 0:
+            budget_color = "#ef4444"
+            status_text = "EXHAUSTED"
+            status_color = "#ef4444"
+        elif budget_pct < 25:
+            budget_color = "#f59e0b"
+            status_text = "LOW"
+            status_color = "#f59e0b"
+        else:
+            budget_color = HUMANA_GREEN
+            status_text = "OK"
+            status_color = HUMANA_GREEN
+
         budget_bar = html.Div([
             html.Div([
-                html.Span("Message Budget: ", style={"fontWeight": "bold"}),
-                html.Span(f"{budget_rem}/{budget_max} remaining"),
-            ], style={"marginBottom": "5px"}),
+                html.Span("Message Budget: ", style={"fontWeight": "bold", "fontSize": "14px"}),
+                html.Span(f"{budget_rem} of {budget_max} remaining ", style={"fontSize": "14px"}),
+                html.Span(f"({budget_used} used — includes prior outreach)", style={"fontSize": "12px", "color": GRAY_TEXT, "marginLeft": "4px"}),
+                html.Span(f"  {status_text}", style={
+                    "fontSize": "11px", "fontWeight": "700", "color": status_color,
+                    "marginLeft": "12px", "padding": "2px 8px",
+                    "backgroundColor": f"{status_color}18", "borderRadius": "4px",
+                }),
+            ], style={"marginBottom": "6px"}),
             html.Div([
+                # Used portion (dark)
                 html.Div(style={
-                    "width": f"{budget_pct}%", "height": "20px",
-                    "backgroundColor": budget_color, "borderRadius": "4px",
-                    "transition": "width 0.5s",
+                    "width": f"{used_pct}%", "height": "12px",
+                    "backgroundColor": "#dc2626" if budget_rem == 0 else "#94a3b8",
+                    "display": "inline-block",
+                }),
+                # Remaining portion (green)
+                html.Div(style={
+                    "width": f"{budget_pct}%", "height": "12px",
+                    "backgroundColor": budget_color,
+                    "display": "inline-block",
                 }),
             ], style={
-                "width": "100%", "backgroundColor": "#e0e0e0",
-                "borderRadius": "4px", "overflow": "hidden",
+                "width": "100%", "backgroundColor": "#f1f5f9",
+                "borderRadius": "6px", "overflow": "hidden",
+                "border": "1px solid #e2e8f0", "display": "flex",
             }),
-        ])
+        ], style={
+            "background": "white", "padding": "12px 16px", "borderRadius": "8px",
+            "border": f"1px solid {status_color}40",
+        })
 
         # --- Action Cards ---
         channel_icons = {"sms": "📱", "email": "📧", "portal": "🌐", "app": "📲", "ivr": "📞"}
@@ -749,13 +907,16 @@ def register_callbacks(app):
         reward_fig.update_layout(title="Cumulative Reward", xaxis_title="Interaction",
                                yaxis_title="Reward", margin=dict(l=40, r=20, t=50, b=40))
 
-        # --- Actions by Measure ---
+        # --- Actions by Measure (with full names) ---
         measure_counts = Counter(a.get("measure") for a in journey if a.get("action_id", 0) != 0)
+        measures_sorted = sorted(measure_counts.keys(), key=lambda m: measure_counts[m], reverse=True)
+        labels = [f"{m} — {MEASURE_DESCRIPTIONS.get(m, m)}" for m in measures_sorted]
         gap_fig = go.Figure(go.Bar(
-            x=list(measure_counts.keys()), y=list(measure_counts.values()),
-            marker_color="#1565c0",
+            x=labels, y=[measure_counts[m] for m in measures_sorted],
+            marker_color=NAVY,
         ))
-        gap_fig.update_layout(title="Actions by Measure", margin=dict(l=40, r=20, t=50, b=40))
+        _styled_fig(gap_fig)
+        gap_fig.update_layout(title="Actions by Measure")
 
         return summary, budget_bar, cards, reward_fig, gap_fig
 
@@ -786,34 +947,24 @@ def register_callbacks(app):
             fig = _empty_fig("No transitions recorded yet...")
             return fig
 
-        # Build Sankey nodes and links
-        all_states = ["CREATED", "QUEUED", "PRESENTED", "VIEWED",
-                      "ACCEPTED", "COMPLETED", "DECLINED", "FAILED", "EXPIRED"]
-        state_colors = {
-            "CREATED": "#94a3b8", "QUEUED": "#64748b",
-            "PRESENTED": "#3b82f6", "VIEWED": "#8b5cf6",
-            "ACCEPTED": HUMANA_GREEN, "COMPLETED": "#15803d",
-            "DECLINED": "#f59e0b", "FAILED": "#ef4444", "EXPIRED": "#9ca3af",
-        }
+        # Build Sankey nodes and links — use centralized state ordering
+        from simulation.action_state_machine import ALL_STATES_ORDERED
+        all_states = [s.value for s in ALL_STATES_ORDERED]
         node_indices = {s: i for i, s in enumerate(all_states)}
 
         sources, targets, values, link_colors = [], [], [], []
-        for (src, dst), count in transition_counts.items():
-            if src in node_indices and dst in node_indices:
-                sources.append(node_indices[src])
-                targets.append(node_indices[dst])
-                values.append(count)
-                # Color link by destination
-                c = state_colors.get(dst, "#94a3b8")
-                link_colors.append(c.replace("#", "rgba(") if not c.startswith("rgba") else c)
-
-        # Convert hex to rgba for links
         def hex_to_rgba(hex_color, alpha=0.4):
             h = hex_color.lstrip("#")
             r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
             return f"rgba({r},{g},{b},{alpha})"
 
-        link_colors_rgba = [hex_to_rgba(state_colors.get(all_states[t], "#94a3b8"), 0.4)
+        for (src, dst), count in transition_counts.items():
+            if src in node_indices and dst in node_indices:
+                sources.append(node_indices[src])
+                targets.append(node_indices[dst])
+                values.append(count)
+
+        link_colors_rgba = [hex_to_rgba(STATE_COLORS.get(all_states[t], "#94a3b8"), 0.4)
                            for t in targets]
 
         fig = go.Figure(go.Sankey(
@@ -821,7 +972,7 @@ def register_callbacks(app):
             node=dict(
                 pad=20, thickness=25,
                 label=all_states,
-                color=[state_colors.get(s, "#94a3b8") for s in all_states],
+                color=[STATE_COLORS.get(s, "#94a3b8") for s in all_states],
                 line=dict(color="white", width=1),
             ),
             link=dict(
@@ -854,15 +1005,30 @@ def register_callbacks(app):
             empty.update_layout(title="Waiting for state machine data...")
             return empty, empty, html.P("No data yet"), empty
 
-        # Overall funnel
-        state_counts = Counter(r.get("current_state", "UNKNOWN") for r in sm_data)
-        ordered_states = ["CREATED", "QUEUED", "PRESENTED", "VIEWED", "ACCEPTED", "COMPLETED", "DECLINED", "FAILED", "EXPIRED"]
-        funnel_vals = [state_counts.get(s, 0) for s in ordered_states]
+        # Overall funnel — cumulative "reached this stage or beyond"
+        # Count how many actions reached each stage by looking at state_history
+        total = len(sm_data)
+        from simulation.action_state_machine import LIFECYCLE_STAGES
+        stage_order = [s.value for s in LIFECYCLE_STAGES]
+        reached = {s: 0 for s in stage_order}
+        for r in sm_data:
+            states_visited = {sh.get("state", sh) for sh in r.get("state_history", [])}
+            # Also count current_state
+            states_visited.add(r.get("current_state", ""))
+            for s in stage_order:
+                if s in states_visited:
+                    reached[s] += 1
+
+        funnel_labels = ["Created", "Queued", "Presented", "Viewed", "Accepted", "Completed"]
+        funnel_vals = [reached[s] for s in stage_order]
+
         funnel = go.Figure(go.Funnel(
-            y=ordered_states, x=funnel_vals,
+            y=funnel_labels, x=funnel_vals,
             textinfo="value+percent initial",
+            marker=dict(color=[NAVY, "#475569", "#3b82f6", "#8b5cf6", HUMANA_GREEN, "#15803d"]),
         ))
-        funnel.update_layout(title="Action Lifecycle Funnel", margin=dict(l=100, r=20, t=50, b=40))
+        _styled_fig(funnel)
+        funnel.update_layout(title="Action Lifecycle Funnel")
 
         # Channel funnel
         channel_states: dict = {}
