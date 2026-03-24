@@ -160,7 +160,7 @@ def generate_historical_activity(
 
         # --- Compute closure probability ---
         base_rate = GAP_CLOSURE_BASE_RATES.get(measure, 0.5)
-        closure_prob_30d = (base_rate * 0.20 *
+        closure_prob_30d = (base_rate * 0.30 *
                            gap_boost *          # Archetype's responsiveness to this measure category
                            ch_affinity *         # How well this channel fits the patient
                            timing_factor *

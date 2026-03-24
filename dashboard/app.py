@@ -142,12 +142,16 @@ def create_app() -> Dash:
             html.Div([
                 html.H1("NBA Stars Model", style={
                     "margin": "0", "fontSize": "22px", "fontWeight": "700",
-                    "color": "#1B2A4A",
+                    "color": "#1B2A4A", "display": "inline-block",
                 }),
                 html.P("CQL Offline RL Agent | Monitoring Dashboard", style={
                     "margin": "2px 0 0", "fontSize": "13px", "color": "#64748b",
                 }),
             ], style={"display": "inline-block"}),
+            # Day counter (top right)
+            html.Div(id="day-counter", style={
+                "float": "right", "textAlign": "right", "paddingTop": "4px",
+            }),
         ], style={
             "backgroundColor": "white", "padding": "16px 32px",
             "borderBottom": "1px solid #e2e8f0",

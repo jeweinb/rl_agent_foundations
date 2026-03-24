@@ -249,7 +249,7 @@ def run_nightly_cycle(
     # --- 7. Detailed simulation rollout on the learned world ---
     winner = new_champion
     try:
-        sim_detail = evaluate_agent_detailed(winner, env, n_episodes=min(eval_episodes, 100), seed=day * 2000)
+        sim_detail = evaluate_agent_detailed(winner, env, n_episodes=1000, seed=day * 2000)
     except Exception as e:
         log.error(f"Detailed evaluation failed: {e}")
         sim_detail = {"mean_reward": 0.0, "std_reward": 0.0, "total_actions": 0,

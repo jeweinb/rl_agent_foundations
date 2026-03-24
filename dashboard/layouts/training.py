@@ -51,6 +51,13 @@ def create_layout():
             ]),
         ]),
 
+        # Simulated action breakdown (what the learned world predicts will be deployed)
+        card([
+            section_title("Predicted Action Deployment",
+                         "What the learned world expects the model to send tomorrow — by channel and content variant"),
+            html.Div(id="sim-action-breakdown", style={"maxHeight": "350px", "overflowY": "auto"}),
+        ], style={"flex": "none", "marginBottom": "16px"}),
+
         # Promotion history
         card([
             section_title("Model Promotion History"),

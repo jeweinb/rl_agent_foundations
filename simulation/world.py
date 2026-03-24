@@ -189,11 +189,18 @@ class WorldSimulator:
                 "engagement": {},
             }
 
-        # Track in state machine
+        # Track in state machine with patient archetype for personalized transitions
         tracking_id = f"day{self.day:02d}_{pid}_{action_id}"
+        patient_arch = {
+            "channel_affinity": snap.get("channel_affinity", {}),
+            "channel_engagement": snap.get("channel_engagement", {}),
+            "overall_responsiveness": snap.get("overall_responsiveness", 0.5),
+            "variant_boost": snap.get("variant_boost", {}),
+        }
         self.state_machine.create_action(
             tracking_id, pid, action_id, action_info.measure,
             action_info.channel, action_info.variant, self.day,
+            patient_archetype=patient_arch,
         )
         self.state_machine.advance(tracking_id, self.day)  # → QUEUED
 
@@ -253,13 +260,18 @@ class WorldSimulator:
         for ps in self.patients.values():
             ps.prune_contact_window(self.day)
 
-        # Process lagged rewards
+        # Process lagged rewards — THIS is where gap closure reward materializes
         resolved = self.lagged_queue.collect(self.day)
         self.daily_gap_closures = {m: 0 for m in HEDIS_MEASURES}
+        closure_reward = 0.0
         for r in resolved:
             if r["will_close"]:
-                self.daily_gap_closures[r["measure"]] = \
-                    self.daily_gap_closures.get(r["measure"], 0) + 1
+                measure = r["measure"]
+                self.daily_gap_closures[measure] = \
+                    self.daily_gap_closures.get(measure, 0) + 1
+                # Gap closure reward (the real objective)
+                measure_weight = MEASURE_WEIGHTS.get(measure, 1)
+                closure_reward += 1.0 * measure_weight
                 # Update patient's last closure day
                 ps = self.patients.get(r["patient_id"])
                 if ps:
@@ -276,6 +288,7 @@ class WorldSimulator:
             "day": self.day,
             "daily_actions": self.daily_actions_taken,
             "gap_closures": dict(self.daily_gap_closures),
+            "closure_reward": closure_reward,
             "total_patients": total_patients,
             "budget_remaining": self.budget_remaining,
             "budget_max": self.budget_total,
@@ -371,8 +384,7 @@ class WorldSimulator:
         ch_affinity = snap.get("channel_affinity", {}).get(action_info.channel, 0.3)
         responsiveness = snap.get("overall_responsiveness", 0.5)
 
-        # base * 0.20 * archetype factors (matches historical data generation)
-        closure_prob = base_rate * 0.20 * gap_boost * ch_affinity * responsiveness
+        closure_prob = base_rate * CLOSURE_BASE_MULTIPLIER * gap_boost * ch_affinity * responsiveness
 
         # Variant boost
         variant_boost = snap.get("variant_boost", {}).get(action_info.variant, 1.0)

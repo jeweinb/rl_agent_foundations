@@ -154,13 +154,13 @@ class HEDISEnv(gym.Env):
             if self.reward_model is not None:
                 state_arr = self._state_vector.reshape(1, -1)
                 action_arr = np.array([action])
-                # Query at 7-day horizon — "will this action lead to closure within a week?"
-                days_arr = np.array([7.0], dtype=np.float32)
-                closure_prob = float(self.reward_model.predict(state_arr, action_arr, days_arr)[0])
-                # Cap to prevent unrealistic 90%+ closure per interaction
-                closure_prob = min(closure_prob, 0.15)
+                # Query at 90-day horizon (highest signal in training data, 21% positive rate)
+                # Then convert to per-day probability for this single step
+                days_arr = np.array([90.0], dtype=np.float32)
+                closure_prob_90d = float(self.reward_model.predict(state_arr, action_arr, days_arr)[0])
+                # P(close today) = 1 - (1 - P(close in 90 days))^(1/90)
+                closure_prob = 1.0 - (1.0 - min(closure_prob_90d, 0.99)) ** (1.0 / 90.0)
             else:
-                # Conservative fallback
                 from datagen.constants import GAP_CLOSURE_BASE_RATES
                 closure_prob = GAP_CLOSURE_BASE_RATES.get(measure, 0.5) * 0.02
 
@@ -223,19 +223,43 @@ class HEDISEnv(gym.Env):
         return obs, reward, terminated, truncated, info
 
     def _compute_mask(self) -> np.ndarray:
-        """Compute action mask using real business rules."""
-        engagement = self._current_snapshot.get("engagement", {})
+        """Compute action mask from the PREDICTED state vector.
+
+        When using learned dynamics, the predicted next state contains updated
+        gap flags, channel consent, budget, and contact features. The mask is
+        derived from these predictions — not the static initial snapshot.
+        This is how eligibility constraints flow through the learned model.
+        """
+        sv = self._state_vector
+
+        # Read gap flags from predicted state (indices 24-41)
+        open_gaps = set()
+        for i, m in enumerate(HEDIS_MEASURES):
+            if sv[FEAT_IDX_GAP_FLAGS_START + i] > 0.5:
+                open_gaps.add(m)
+        # Keep in sync for termination check
+        self._open_gaps = open_gaps
+
+        # Read channel availability from predicted state (indices 42-45)
+        # These are continuous predictions from the dynamics model.
+        # Threshold at 0.5 to convert to boolean.
         channel_availability = {
-            "sms": engagement.get("sms_consent", False),
-            "email": engagement.get("email_available", False),
-            "portal": engagement.get("portal_registered", False),
-            "app": engagement.get("app_installed", False),
-            "ivr": True,
+            "sms": sv[42] > 0.5,      # sms_consent
+            "email": sv[43] > 0.5,    # email_available
+            "portal": sv[44] > 0.5,   # portal_registered
+            "app": sv[45] > 0.5,      # app_installed
+            "ivr": True,              # IVR always available
         }
+
+        # Read budget from predicted state (index 57)
+        # budget_remaining_norm is in [0,1] → scale back to actual count
+        predicted_budget_frac = sv[57]
+        budget_remaining = int(predicted_budget_frac * self._budget_max)
+
         return compute_action_mask(
-            open_gaps=self._open_gaps,
+            open_gaps=open_gaps,
             channel_availability=channel_availability,
             contacts_this_week=self._contacts_this_week,
             recent_measures=self._recent_measures,
-            budget_remaining=self._budget_remaining,
+            budget_remaining=budget_remaining,
         )

@@ -295,7 +295,7 @@ YEAR_DAYS = 365
 # ---------------------------------------------------------------------------
 # Gap closure probability factors (simulation world dynamics)
 # ---------------------------------------------------------------------------
-CLOSURE_BASE_MULTIPLIER = 0.04        # base_rate * this = daily closure prob
+CLOSURE_BASE_MULTIPLIER = 0.30        # base_rate * this * archetype factors = per-interaction closure prob
 CLOSURE_BEST_CHANNEL_FACTOR = 2.5     # Multiplied when using best channel for measure
 CLOSURE_CLICKED_FACTOR = 3.0          # Multiplied if patient clicked
 CLOSURE_OPENED_FACTOR = 1.5           # Multiplied if patient opened/viewed
@@ -333,7 +333,7 @@ REWARD_WEIGHTS = {
 # CQL Hyperparameters
 # ---------------------------------------------------------------------------
 CQL_CONFIG = {
-    "min_q_weight": 5.0,
+    "min_q_weight": 1.0,     # Reduced from 5.0 — less aggressive conservatism
     "lagrangian": True,
     "bc_iters": 50,
     "cql_iters": 100,

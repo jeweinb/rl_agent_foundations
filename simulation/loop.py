@@ -166,19 +166,25 @@ def run_simulation(
             )
 
             gap_closures_total = sum(day_results["gap_closures"].values())
+            closure_reward = day_results.get("closure_reward", 0)
+            immediate_reward = day_results.get("immediate_reward", 0)
             log.metric(
-                f"Day {day}: {day_results['num_actions']} actions, "
-                f"reward={day_results['total_reward']:.2f}, "
-                f"closures={gap_closures_total}, "
-                f"pending={day_results['pending_rewards']}",
+                f"Day {day}: {day_results['num_actions']} actions sent, "
+                f"{gap_closures_total} gaps closed (reward: +{closure_reward:.0f}), "
+                f"action cost: {immediate_reward:.1f}, "
+                f"net reward: {day_results['total_reward']:.1f}",
                 day=day,
                 actions=day_results["num_actions"],
                 reward=day_results["total_reward"],
                 gap_closures=gap_closures_total,
+                closure_reward=closure_reward,
             )
 
             budget_pct = world.budget_remaining / max(world.budget_total, 1) * 100
-            log.info(f"Budget: {world.budget_remaining:,}/{world.budget_total:,} ({budget_pct:.0f}%)")
+            log.info(
+                f"Budget: {world.budget_remaining:,}/{world.budget_total:,} ({budget_pct:.0f}%) | "
+                f"Pending closures: {day_results['pending_rewards']:,}"
+            )
         except Exception as e:
             log.exception(f"DAY PHASE FAILED on day {day}", exc=e)
             raise
@@ -238,9 +244,18 @@ def run_simulation(
         with open(os.path.join(SIMULATION_DATA_DIR, "cumulative_metrics.json"), "w") as f:
             json.dump(metrics.to_records(), f, indent=2, default=str)
 
+        # Count measures at/above 4★
+        detail = day_metrics.get("measure_detail", {})
+        at_4star = sum(1 for d in detail.values() if d.get("at_or_above_4", False))
+        total_measures = len(detail) if detail else len(HEDIS_MEASURES)
+
+        stars = day_metrics['stars_score']
+        gap_to_bonus = 4.0 - stars
+        bonus_status = "BONUS!" if day_metrics['above_bonus_threshold'] else f"{gap_to_bonus:.2f} to bonus"
         log.metric(
-            f"STARS: {day_metrics['stars_score']:.2f} | "
-            f"Cumulative Reward: {day_metrics['cumulative_reward']:.2f} | "
+            f"STARS: {stars:.2f} ({bonus_status}) | "
+            f"Measures at 4★: {at_4star}/{total_measures} | "
+            f"Total gaps closed: {day_metrics['cumulative_reward']:.0f} | "
             f"Model: v{model_version}",
             stars=day_metrics["stars_score"],
             cumulative_reward=day_metrics["cumulative_reward"],

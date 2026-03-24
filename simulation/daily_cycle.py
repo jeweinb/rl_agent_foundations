@@ -123,9 +123,16 @@ def run_daily_cycle(
     with open(cumulative_sm_path, "w") as f:
         json.dump(all_sm_records, f, default=str)
 
+    # Total reward = immediate action rewards + lagged closure rewards
+    immediate_reward = sum(daily_rewards)
+    closure_reward = day_summary.get("closure_reward", 0.0)
+    total_reward = immediate_reward + closure_reward
+
     return {
         "day": day,
-        "total_reward": sum(daily_rewards),
+        "total_reward": total_reward,
+        "immediate_reward": immediate_reward,
+        "closure_reward": closure_reward,
         "num_actions": sum(1 for a in daily_actions if not a["is_no_action"]),
         "action_distribution": action_counts,
         **day_summary,

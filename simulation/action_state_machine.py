@@ -127,8 +127,15 @@ class ActionLifecycleTracker:
         channel: str,
         variant: str,
         day: int,
+        patient_archetype: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
-        """Register a new action in the state machine."""
+        """Register a new action in the state machine.
+
+        Args:
+            patient_archetype: Dict with channel_affinity, channel_engagement,
+                overall_responsiveness, variant_boost from the patient's archetype.
+                Used to modulate transition probabilities.
+        """
         record = {
             "tracking_id": tracking_id,
             "patient_id": patient_id,
@@ -142,6 +149,7 @@ class ActionLifecycleTracker:
                 {"state": ActionState.CREATED, "day": day, "timestamp": datetime.now().isoformat()}
             ],
             "terminal": False,
+            "patient_archetype": patient_archetype or {},
         }
         self.actions[tracking_id] = record
         self.history.append({
@@ -156,6 +164,12 @@ class ActionLifecycleTracker:
     def advance(self, tracking_id: str, day: int) -> Optional[Dict[str, Any]]:
         """Attempt to advance an action to its next state.
 
+        Transition probabilities are modulated by the patient's archetype:
+        - Channel affinity boosts PRESENTED→VIEWED (patient opens messages on preferred channels)
+        - Channel engagement boosts VIEWED→ACCEPTED (patient acts on channels they engage with)
+        - Overall responsiveness scales all patient-dependent transitions
+        - Variant boost increases acceptance for content types the archetype responds to
+
         Returns the transition record if a transition occurred, None otherwise.
         """
         record = self.actions.get(tracking_id)
@@ -169,22 +183,36 @@ class ActionLifecycleTracker:
             return None
 
         channel = record["channel"]
-        probs = CHANNEL_TRANSITION_PROBS.get(channel, {})
+        base_probs = CHANNEL_TRANSITION_PROBS.get(channel, {})
 
-        # Determine transition
+        # Get archetype modifiers
+        arch = record.get("patient_archetype", {})
+        ch_affinity = arch.get("channel_affinity", {}).get(channel, 0.5)
+        ch_engagement = arch.get("channel_engagement", {}).get(channel, 0.2)
+        responsiveness = arch.get("overall_responsiveness", 0.5)
+        variant_boost = arch.get("variant_boost", {}).get(record.get("variant", ""), 1.0)
+
+        # Determine transition with archetype-modulated probabilities
         if current == ActionState.CREATED:
             next_state = ActionState.QUEUED
         elif current == ActionState.QUEUED:
-            prob = probs.get("QUEUED→PRESENTED", 0.9)
+            # Delivery: mostly channel infrastructure, slight archetype effect
+            prob = base_probs.get("QUEUED→PRESENTED", 0.9)
             next_state = ActionState.PRESENTED if self.rng.random() < prob else ActionState.FAILED
         elif current == ActionState.PRESENTED:
-            prob = probs.get("PRESENTED→VIEWED", 0.5)
+            # Viewing: heavily driven by channel affinity (does patient open this channel?)
+            base = base_probs.get("PRESENTED→VIEWED", 0.5)
+            prob = min(base * (0.5 + ch_affinity), 0.98)
             next_state = ActionState.VIEWED if self.rng.random() < prob else ActionState.EXPIRED
         elif current == ActionState.VIEWED:
-            prob = probs.get("VIEWED→ACCEPTED", 0.3)
+            # Acceptance: driven by engagement level + variant match + responsiveness
+            base = base_probs.get("VIEWED→ACCEPTED", 0.3)
+            prob = min(base * (0.3 + ch_engagement) * responsiveness * variant_boost, 0.90)
             next_state = ActionState.ACCEPTED if self.rng.random() < prob else ActionState.DECLINED
         elif current == ActionState.ACCEPTED:
-            prob = probs.get("ACCEPTED→COMPLETED", 0.6)
+            # Completion: driven by overall responsiveness
+            base = base_probs.get("ACCEPTED→COMPLETED", 0.6)
+            prob = min(base * (0.5 + responsiveness * 0.5), 0.95)
             next_state = ActionState.COMPLETED if self.rng.random() < prob else ActionState.FAILED
         else:
             return None

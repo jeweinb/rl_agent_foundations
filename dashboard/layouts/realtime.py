@@ -68,9 +68,20 @@ def create_layout():
         row([
             card([dcc.Graph(id="sm-channel-funnel", style={"height": "300px"},
                            config={"displayModeBar": False})]),
-            card([dcc.Graph(id="sm-conversion-rates", style={"height": "300px"},
-                           config={"displayModeBar": False})]),
+            card([
+                section_title("Daily Conversion Trend",
+                             "Is the model getting better at selecting actions that patients accept?"),
+                dcc.Graph(id="sm-conversion-rates", style={"height": "280px"},
+                         config={"displayModeBar": False}),
+            ]),
         ]),
+
+        # Action breakdown by variant
+        card([
+            section_title("Action Deployment Breakdown",
+                         "Full breakdown of every action type sent — volume, channel, and content variant"),
+            html.Div(id="action-variant-breakdown", style={"maxHeight": "400px", "overflowY": "auto"}),
+        ], style={"flex": "none", "marginBottom": "16px"}),
 
         # Recent actions + transitions
         row([

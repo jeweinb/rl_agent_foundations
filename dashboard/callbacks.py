@@ -58,6 +58,34 @@ def register_callbacks(app):
     """Register all callbacks with the Dash app."""
 
     # =========================================================================
+    # Global: Day Counter in header
+    # =========================================================================
+    @app.callback(
+        Output("day-counter", "children"),
+        Input("interval-component", "n_intervals"),
+    )
+    def update_day_counter(_):
+        metrics = load_cumulative_metrics()
+        if not metrics:
+            return html.Div([
+                html.Span("Initializing...", style={"fontSize": "14px", "color": "#64748b"}),
+            ])
+        latest = metrics[-1]
+        day = latest.get("day", 0)
+        from config import SIMULATION_DAYS
+        stars = latest.get("stars_score", 1.0)
+        stars_color = "#00A664" if stars >= 4.0 else ("#f59e0b" if stars >= 3.0 else "#1B2A4A")
+        return html.Div([
+            html.Div([
+                html.Span(f"Day {day}", style={"fontSize": "22px", "fontWeight": "700", "color": "#1B2A4A"}),
+                html.Span(f" / {SIMULATION_DAYS}", style={"fontSize": "14px", "color": "#64748b"}),
+            ]),
+            html.Div([
+                html.Span(f"STARS {stars:.2f}", style={"fontSize": "14px", "fontWeight": "600", "color": stars_color}),
+            ]),
+        ])
+
+    # =========================================================================
     # Tab 1: STARS Overview
     # =========================================================================
     @app.callback(
@@ -129,20 +157,39 @@ def register_callbacks(app):
         else:
             cum = _empty_fig("Cumulative Reward — waiting for data...")
 
-        # Regret Curve
-        if metrics:
-            oracle_per_day = max(m["daily_reward"] for m in metrics) * 1.5 if metrics else 5.0
+        # Regret Curve — oracle is the best single-day performance observed so far
+        # As model improves, daily reward approaches oracle → regret flattens
+        if metrics and len(metrics) > 1:
+            reg = go.Figure()
+            # Running best: track the best daily reward seen so far
+            best_so_far = []
+            running_best = float("-inf")
+            for m in metrics:
+                running_best = max(running_best, m["daily_reward"])
+                best_so_far.append(running_best)
+
+            # Regret = cumulative gap between current performance and running best
             regret = []
             cum_regret = 0.0
-            for m in metrics:
-                cum_regret += oracle_per_day - m["daily_reward"]
+            for i, m in enumerate(metrics):
+                cum_regret += best_so_far[i] - m["daily_reward"]
                 regret.append(cum_regret)
-            reg = go.Figure()
+
             reg.add_trace(go.Scatter(x=days, y=regret, mode="lines", name="Cumulative Regret",
                                      line=dict(color=NAVY, width=2)))
+            # Also show daily reward trend for context
+            daily_rewards = [m["daily_reward"] for m in metrics]
+            reg.add_trace(go.Scatter(x=days, y=daily_rewards, mode="lines+markers",
+                                     name="Daily Reward", line=dict(color=HUMANA_GREEN, width=1, dash="dot"),
+                                     yaxis="y2"))
             _styled_fig(reg)
-            reg.update_layout(title="Cumulative Regret vs Oracle", xaxis_title="Day",
-                            yaxis_title="Regret")
+            reg.update_layout(
+                title="Regret (should flatten as model improves)",
+                xaxis_title="Day",
+                yaxis=dict(title="Cumulative Regret", side="left"),
+                yaxis2=dict(title="Daily Reward", side="right", overlaying="y"),
+                legend=dict(x=0.01, y=0.99),
+            )
         else:
             reg = _empty_fig("Regret Curve — waiting for data...")
 
@@ -224,11 +271,16 @@ def register_callbacks(app):
             if not measures_with_data:
                 measures_with_data = HEDIS_MEASURES[:8]
             z_data = []
+            hover_data = []
             for m in measures_with_data:
                 row = [met.get("measure_closure_rates", {}).get(m, 0) for met in metrics]
                 z_data.append(row)
+                hover_data.append([f"{m} — {MEASURE_DESCRIPTIONS.get(m, m)}<br>Day {d}: {r:.1%}"
+                                  for d, r in zip(days_list, row)])
+            y_labels = [f"{m}" for m in measures_with_data]
             heatmap = go.Figure(go.Heatmap(
-                z=z_data, x=days_list, y=measures_with_data,
+                z=z_data, x=days_list, y=y_labels,
+                text=hover_data, hoverinfo="text",
                 colorscale=[[0, "#f0fdf4"], [0.3, "#86efac"], [0.6, "#22c55e"], [1.0, "#15803d"]],
                 hoverongaps=False,
                 colorbar=dict(title="Rate", thickness=15),
@@ -253,7 +305,8 @@ def register_callbacks(app):
          Output("recent-actions-table", "children"),
          Output("action-by-channel", "figure"),
          Output("action-by-measure", "figure"),
-         Output("action-vs-noaction", "figure")],
+         Output("action-vs-noaction", "figure"),
+         Output("action-variant-breakdown", "children")],
         [Input("interval-component", "n_intervals"),
          Input("leaderboard-rank-by", "value")],
     )
@@ -398,8 +451,10 @@ def register_callbacks(app):
                 for aid in range(1, NUM_ACTIONS):  # Skip no_action
                     act = ACTION_BY_ID.get(aid)
                     if act:
-                        label = f"{act.measure} | {act.channel.upper()} | {act.variant.replace('_', ' ').title()}"
-                        action_data.append((label, float(avg_q[aid]), act.measure))
+                        m_full = MEASURE_DESCRIPTIONS.get(act.measure, act.measure)
+                        short_label = f"{act.measure} | {act.channel.upper()} | {act.variant.replace('_', ' ').title()}"
+                        hover = f"{act.measure} — {m_full}<br>Channel: {act.channel.upper()}<br>Variant: {act.variant.replace('_', ' ').title()}<br>Q-Value: {float(avg_q[aid]):.4f}"
+                        action_data.append((short_label, float(avg_q[aid]), hover))
 
                 action_data.sort(key=lambda x: x[1], reverse=True)
                 top = action_data[:20]
@@ -407,6 +462,7 @@ def register_callbacks(app):
                 if top:
                     labels = [t[0] for t in top]
                     values = [t[1] for t in top]
+                    hovers = [t[2] for t in top]
                     colors = [HUMANA_GREEN if v > 0 else "#94a3b8" for v in values]
 
                     leaderboard = go.Figure(go.Bar(
@@ -414,6 +470,7 @@ def register_callbacks(app):
                         marker_color=colors,
                         text=[f"{v:.3f}" for v in values],
                         textposition="outside",
+                        hovertext=hovers, hoverinfo="text",
                     ))
                     _styled_fig(leaderboard)
                     leaderboard.update_layout(
@@ -429,11 +486,16 @@ def register_callbacks(app):
         elif sm_data:
             # Rank by acceptance or completion from state machine
             from collections import defaultdict
-            action_perf = defaultdict(lambda: {"total": 0, "accepted": 0, "completed": 0})
+            action_perf = defaultdict(lambda: {"total": 0, "accepted": 0, "completed": 0, "measure": "?"})
             for r in sm_data:
-                label = f"{r.get('measure', '?')} | {r.get('channel', '?').upper()} | {r.get('variant', '?').replace('_', ' ').title()}"
+                measure = r.get("measure", "?")
+                m_full = MEASURE_DESCRIPTIONS.get(measure, measure)
+                channel = r.get("channel", "?").upper()
+                variant = r.get("variant", "?").replace("_", " ").title()
+                label = f"{measure} | {channel} | {variant}"
                 state = r.get("current_state", "")
                 action_perf[label]["total"] += 1
+                action_perf[label]["measure"] = measure
                 if state in ("ACCEPTED", "COMPLETED"):
                     action_perf[label]["accepted"] += 1
                 if state == "COMPLETED":
@@ -450,7 +512,9 @@ def register_callbacks(app):
                 labels = [k for k, _ in sorted_actions]
                 rates = [v[metric_key] / max(v["total"], 1) for _, v in sorted_actions]
                 hover = [
-                    f"{k}<br>Accepted: {v['accepted']}/{v['total']} ({v['accepted']/max(v['total'],1):.0%})"
+                    f"{v['measure']} — {MEASURE_DESCRIPTIONS.get(v['measure'], v['measure'])}<br>"
+                    f"{k}<br>"
+                    f"Accepted: {v['accepted']}/{v['total']} ({v['accepted']/max(v['total'],1):.0%})"
                     f"<br>Completed: {v['completed']}/{v['total']} ({v['completed']/max(v['total'],1):.0%})"
                     for k, v in sorted_actions
                 ]
@@ -474,7 +538,51 @@ def register_callbacks(app):
         else:
             leaderboard = _empty_fig("Action Leaderboard — waiting for data...")
 
-        return budget_gauge, leaderboard, table, ch_fig, m_fig, pie
+        # --- Action Variant Breakdown Table ---
+        sm_data_for_breakdown = load_all_state_machine_data()
+        if sm_data_for_breakdown:
+            from collections import defaultdict
+            variant_stats = defaultdict(lambda: {"total": 0, "accepted": 0, "completed": 0})
+            for r in sm_data_for_breakdown:
+                measure = r.get("measure", "?")
+                channel = r.get("channel", "?")
+                variant = r.get("variant", "?")
+                label = f"{measure} — {MEASURE_DESCRIPTIONS.get(measure, measure)}"
+                ch_label = channel.upper()
+                v_label = (variant or "").replace("_", " ").title()
+                key = (label, ch_label, v_label)
+                state = r.get("current_state", "")
+                variant_stats[key]["total"] += 1
+                if state in ("ACCEPTED", "COMPLETED"):
+                    variant_stats[key]["accepted"] += 1
+                if state == "COMPLETED":
+                    variant_stats[key]["completed"] += 1
+
+            sorted_variants = sorted(variant_stats.items(), key=lambda x: x[1]["total"], reverse=True)
+            rows = []
+            for (measure_label, ch, v), stats in sorted_variants[:30]:
+                accept_rate = stats["accepted"] / max(stats["total"], 1)
+                rows.append(html.Tr([
+                    html.Td(measure_label, style={"fontSize": "11px"}),
+                    html.Td(ch, style={"fontWeight": "600"}),
+                    html.Td(v, style={"fontSize": "11px", "color": GRAY_TEXT}),
+                    html.Td(f"{stats['total']:,}"),
+                    html.Td(f"{accept_rate:.0%}", style={
+                        "color": HUMANA_GREEN if accept_rate > 0.10 else ("#f59e0b" if accept_rate > 0.03 else "#ef4444"),
+                        "fontWeight": "600"}),
+                    html.Td(f"{stats['completed']:,}"),
+                ]))
+            variant_breakdown = html.Table([
+                html.Thead(html.Tr([
+                    html.Th("Measure"), html.Th("Channel"), html.Th("Variant"),
+                    html.Th("Sent"), html.Th("Accept %"), html.Th("Completed"),
+                ])),
+                html.Tbody(rows),
+            ], style={"width": "100%", "fontSize": "12px"})
+        else:
+            variant_breakdown = html.P("Waiting for action data...", style={"color": GRAY_TEXT})
+
+        return budget_gauge, leaderboard, table, ch_fig, m_fig, pie, variant_breakdown
 
     # =========================================================================
     # Tab 3: Training & Simulation
@@ -487,7 +595,8 @@ def register_callbacks(app):
          Output("sim-closure-predictions", "figure"),
          Output("sim-channel-effectiveness", "figure"),
          Output("sim-stars-projection", "figure"),
-         Output("promotion-history-table", "children")],
+         Output("promotion-history-table", "children"),
+         Output("sim-action-breakdown", "children")],
         Input("interval-component", "n_intervals"),
     )
     def update_training(_):
@@ -554,12 +663,16 @@ def register_callbacks(app):
             latest = sim_preds[-1]
             dist = latest.get("action_dist_by_measure", {})
             if dist:
+                total_actions = sum(dist.values())
                 measures = sorted(dist.keys(), key=lambda m: dist[m], reverse=True)
-                labels = [f"{m}" for m in measures]
-                values = [dist[m] for m in measures]
-                act_dist = go.Figure(go.Bar(x=labels, y=values, marker_color=HUMANA_GREEN))
+                pcts = [dist[m] / max(total_actions, 1) for m in measures]
+                hover = [f"{m} — {MEASURE_DESCRIPTIONS.get(m, m)}<br>{dist[m]:,} actions ({dist[m]/max(total_actions,1):.1%})" for m in measures]
+                act_dist = go.Figure(go.Bar(x=measures, y=pcts, marker_color=HUMANA_GREEN,
+                                            hovertext=hover, hoverinfo="text",
+                                            text=[f"{p:.0%}" for p in pcts], textposition="outside"))
                 _styled_fig(act_dist)
-                act_dist.update_layout(title="Predicted Action Mix by Measure")
+                act_dist.update_layout(title="Predicted Action Mix by Measure (%)", yaxis_title="Share of Actions",
+                                      yaxis=dict(tickformat=".0%"))
             else:
                 act_dist = _empty_fig("No action distribution data yet")
         else:
@@ -572,13 +685,16 @@ def register_callbacks(app):
             if closure_rates:
                 measures = sorted(closure_rates.keys())
                 rates = [closure_rates[m] for m in measures]
+                hover = [f"{m} — {MEASURE_DESCRIPTIONS.get(m, m)}<br>Rate: {r:.1%}" for m, r in zip(measures, rates)]
                 closure_fig = go.Figure(go.Bar(
                     x=measures, y=rates,
                     marker_color=[HUMANA_GREEN if r > 0.05 else "#94a3b8" for r in rates],
+                    hovertext=hover, hoverinfo="text",
+                    text=[f"{r:.1%}" for r in rates], textposition="outside",
                 ))
                 _styled_fig(closure_fig)
-                closure_fig.update_layout(title="Predicted Closure Rate by Measure (Learned World)",
-                                        yaxis_title="Closure Rate per Action")
+                closure_fig.update_layout(title="Predicted Closure Rate by Measure",
+                                        yaxis_title="Closure Rate", yaxis=dict(tickformat=".0%"))
             else:
                 closure_fig = _empty_fig("No closure predictions yet")
         else:
@@ -594,6 +710,7 @@ def register_callbacks(app):
                 ch_fig = go.Figure(go.Bar(
                     x=[c.upper() for c in channels], y=rates,
                     marker_color=NAVY,
+                    text=[f"{r:.1%}" for r in rates], textposition="outside",
                 ))
                 _styled_fig(ch_fig)
                 ch_fig.update_layout(title="Predicted Channel Effectiveness (Learned World)",
@@ -646,135 +763,183 @@ def register_callbacks(app):
         else:
             table = html.P("Waiting for training data...")
 
-        return cc_fig, mv_fig, sim_summary, act_dist, closure_fig, ch_fig, stars_proj, table
+        # --- Simulated action deployment breakdown ---
+        if sim_preds:
+            latest = sim_preds[-1]
+            # Build from the detailed eval data stored in sim_predictions
+            # We have action_dist_by_measure and action_dist_by_channel
+            dist_m = latest.get("action_dist_by_measure", {})
+            dist_c = latest.get("action_dist_by_channel", {})
+            if dist_m:
+                total_m = sum(dist_m.values())
+                total_c = sum(dist_c.values()) if dist_c else total_m
+                rows = []
+                for m in sorted(dist_m.keys(), key=lambda x: dist_m[x], reverse=True):
+                    m_full = MEASURE_DESCRIPTIONS.get(m, m)
+                    pct = dist_m[m] / max(total_m, 1)
+                    rows.append(html.Tr([
+                        html.Td(f"{m} — {m_full}", style={"fontSize": "11px"}),
+                        html.Td(f"{pct:.1%}"),
+                        html.Td(f"{dist_m[m]:,}", style={"color": GRAY_TEXT, "fontSize": "11px"}),
+                    ]))
+                if dist_c:
+                    rows.append(html.Tr([html.Td("", colSpan=3, style={"borderTop": f"2px solid {GRAY_BORDER}"})]))
+                    for ch in sorted(dist_c.keys(), key=lambda x: dist_c[x], reverse=True):
+                        pct = dist_c[ch] / max(total_c, 1)
+                        rows.append(html.Tr([
+                            html.Td(f"Channel: {ch.upper()}", style={"fontSize": "11px", "fontWeight": "600"}),
+                            html.Td(f"{pct:.1%}"),
+                            html.Td(f"{dist_c[ch]:,}", style={"color": GRAY_TEXT, "fontSize": "11px"}),
+                        ]))
+                sim_breakdown = html.Table([
+                    html.Thead(html.Tr([html.Th("Action / Channel"), html.Th("Share"), html.Th("Count")])),
+                    html.Tbody(rows),
+                ], style={"width": "100%", "fontSize": "12px"})
+            else:
+                sim_breakdown = html.P("No predicted breakdown yet", style={"color": GRAY_TEXT})
+        else:
+            sim_breakdown = html.P("Waiting for simulation predictions...", style={"color": GRAY_TEXT})
+
+        return cc_fig, mv_fig, sim_summary, act_dist, closure_fig, ch_fig, stars_proj, table, sim_breakdown
 
     # =========================================================================
-    # Tab 4: Measure Deep Dive — Channel × Measure Chord/Heatmap
+    # Tab 4: Measure Deep Dive
     # =========================================================================
     @app.callback(
-        Output("channel-measure-chord", "figure"),
-        Input("interval-component", "n_intervals"),
-    )
-    def update_chord(_):
-        # Use state machine data for accurate lifecycle stats (not stale action records)
-        sm_data = load_all_state_machine_data()
-        if not sm_data:
-            fig = _empty_fig("Channel × Measure Effectiveness — waiting for data...")
-            return fig
-
-        from config import CHANNELS
-        from collections import defaultdict
-
-        # Count acceptance rate per channel × measure from state machine
-        counts = defaultdict(lambda: {"total": 0, "accepted": 0, "completed": 0, "viewed": 0})
-        for r in sm_data:
-            ch = r.get("channel", "unknown")
-            m = r.get("measure", "unknown")
-            state = r.get("current_state", "")
-            counts[(ch, m)]["total"] += 1
-            if state in ("VIEWED", "ACCEPTED", "COMPLETED", "DECLINED"):
-                counts[(ch, m)]["viewed"] += 1
-            if state in ("ACCEPTED", "COMPLETED"):
-                counts[(ch, m)]["accepted"] += 1
-            if state == "COMPLETED":
-                counts[(ch, m)]["completed"] += 1
-
-        active_measures = sorted(set(r.get("measure") for r in sm_data if r.get("measure")))
-        if not active_measures:
-            active_measures = HEDIS_MEASURES[:6]
-        active_channels = [c for c in CHANNELS if any(counts[(c, m)]["total"] > 0 for m in active_measures)]
-        if not active_channels:
-            active_channels = CHANNELS
-
-        z = []
-        text = []
-        for ch in active_channels:
-            row = []
-            text_row = []
-            for m in active_measures:
-                c = counts[(ch, m)]
-                rate = c["accepted"] / max(c["total"], 1)
-                row.append(rate)
-                text_row.append(
-                    f"{ch.upper()} × {m}<br>"
-                    f"Acceptance: {rate:.1%}<br>"
-                    f"Viewed: {c['viewed']}/{c['total']}<br>"
-                    f"Accepted: {c['accepted']}/{c['total']}<br>"
-                    f"Completed: {c['completed']}/{c['total']}"
-                )
-            z.append(row)
-            text.append(text_row)
-
-        fig = go.Figure(go.Heatmap(
-            z=z, x=active_measures, y=[c.upper() for c in active_channels],
-            text=text, hoverinfo="text",
-            colorscale=[[0, "#f8fafc"], [0.2, "#bae6fd"], [0.5, "#38bdf8"], [0.8, "#0284c7"], [1.0, NAVY]],
-            colorbar=dict(title="Click Rate", thickness=15),
-        ))
-        _styled_fig(fig)
-        fig.update_layout(
-            title="Channel × Measure Click-Through Rate",
-            xaxis_title="", yaxis_title="",
-            yaxis=dict(dtick=1),
-        )
-        return fig
-
-    @app.callback(
-        [Output("measure-closure-trend", "figure"),
+        [Output("measure-overview-card", "children"),
+         Output("measure-closure-trend", "figure"),
+         Output("measure-action-variants", "figure"),
          Output("measure-channel-effectiveness", "figure"),
-         Output("measure-funnel", "figure")],
+         Output("measure-action-table", "children")],
         [Input("interval-component", "n_intervals"),
          Input("measure-selector", "value")],
     )
     def update_measures(_, selected_measure):
-        metrics = load_cumulative_metrics()
-        actions = load_all_actions()
+        from config import MEASURE_CUT_POINTS, CHANNELS
+        from collections import defaultdict
 
         if not selected_measure:
             selected_measure = "COL"
 
-        # Closure trend for selected measure with actual CMS cut points
-        from config import MEASURE_CUT_POINTS
+        metrics = load_cumulative_metrics()
+        sm_data = load_all_state_machine_data()
+        measure_sm = [r for r in sm_data if r.get("measure") == selected_measure]
+        measure_desc = MEASURE_DESCRIPTIONS.get(selected_measure, selected_measure)
         cuts = MEASURE_CUT_POINTS.get(selected_measure, {})
         cut_4star = cuts.get(4, 0.70)
-        cut_5star = cuts.get(5, 0.85)
+        weight = MEASURE_WEIGHTS.get(selected_measure, 1)
 
+        # --- Overview card ---
+        current_rate = 0.0
+        current_stars = 1.0
+        if metrics:
+            latest = metrics[-1]
+            detail = latest.get("measure_detail", {}).get(selected_measure, {})
+            current_rate = detail.get("rate", 0)
+            current_stars = detail.get("stars", 1.0)
+
+        total_actions_for_measure = len(measure_sm)
+        unique_patients = len(set(r.get("patient_id") for r in measure_sm)) if measure_sm else 0
+
+        overview = html.Div([
+            html.Div([
+                html.Div([
+                    html.H3(f"{selected_measure} — {measure_desc}", style={
+                        "margin": "0", "fontSize": "18px", "fontWeight": "700", "color": NAVY}),
+                    html.Span(f"Weight: {weight}x", style={
+                        "backgroundColor": NAVY if weight > 1 else "#e2e8f0",
+                        "color": "white" if weight > 1 else GRAY_TEXT,
+                        "padding": "2px 10px", "borderRadius": "12px",
+                        "fontSize": "11px", "fontWeight": "600", "marginLeft": "12px"}),
+                ], style={"display": "flex", "alignItems": "center", "marginBottom": "12px"}),
+                html.Div([
+                    html.Div([
+                        html.Span(f"{current_rate:.1%}", style={"fontSize": "28px", "fontWeight": "700", "color": NAVY}),
+                        html.Span(" closure rate", style={"fontSize": "13px", "color": GRAY_TEXT}),
+                    ], style={"marginRight": "40px"}),
+                    html.Div([
+                        html.Span(f"{'★' * int(current_stars)}{'☆' * (5 - int(current_stars))} {current_stars:.1f}",
+                                 style={"fontSize": "20px", "fontWeight": "600",
+                                        "color": HUMANA_GREEN if current_stars >= 4 else ("#f59e0b" if current_stars >= 3 else "#ef4444")}),
+                        html.Span(f" (need {cut_4star:.0%} for 4★)", style={"fontSize": "12px", "color": GRAY_TEXT}),
+                    ], style={"marginRight": "40px"}),
+                    html.Div([
+                        html.Span(f"{total_actions_for_measure:,}", style={"fontSize": "28px", "fontWeight": "700", "color": NAVY}),
+                        html.Span(" actions sent", style={"fontSize": "13px", "color": GRAY_TEXT}),
+                    ], style={"marginRight": "40px"}),
+                    html.Div([
+                        html.Span(f"{unique_patients:,}", style={"fontSize": "28px", "fontWeight": "700", "color": NAVY}),
+                        html.Span(" patients contacted", style={"fontSize": "13px", "color": GRAY_TEXT}),
+                    ]),
+                ], style={"display": "flex", "flexWrap": "wrap", "gap": "10px"}),
+            ]),
+        ], style={
+            "background": "white", "borderRadius": "12px", "padding": "20px",
+            "boxShadow": "0 1px 3px rgba(0,0,0,0.08)", "border": f"1px solid {GRAY_BORDER}",
+        })
+
+        # --- Closure trend ---
+        cut_5star = cuts.get(5, 0.85)
         if metrics:
             days = [m["day"] for m in metrics]
             rates = [m.get("measure_closure_rates", {}).get(selected_measure, 0) for m in metrics]
             trend = go.Figure()
             trend.add_trace(go.Scatter(x=days, y=rates, mode="lines+markers", name="Closure Rate",
-                                       line=dict(color=HUMANA_GREEN, width=3),
-                                       marker=dict(size=6)))
+                                       line=dict(color=HUMANA_GREEN, width=3), marker=dict(size=6)))
             trend.add_hline(y=cut_4star, line_dash="dash", line_color="#f59e0b",
                           annotation_text=f"4★ ({cut_4star:.0%})")
             trend.add_hline(y=cut_5star, line_dash="dot", line_color=HUMANA_GREEN,
                           annotation_text=f"5★ ({cut_5star:.0%})")
             _styled_fig(trend)
-            trend.update_layout(
-                title=f"{selected_measure} — {MEASURE_DESCRIPTIONS.get(selected_measure, '')}",
-                xaxis_title="Day", yaxis_title="Closure Rate",
-                yaxis=dict(range=[0, 1]),
-            )
+            trend.update_layout(title=f"Closure Rate Over Time", xaxis_title="Day",
+                              yaxis_title="Rate", yaxis=dict(range=[0, 1]))
         else:
-            trend = _empty_fig(f"{selected_measure} — waiting for data...")
+            trend = _empty_fig("Waiting for data...")
 
-        # Channel effectiveness and funnel — use state machine data for accurate lifecycle
-        sm_data = load_all_state_machine_data()
-        measure_sm = [r for r in sm_data if r.get("measure") == selected_measure]
-
+        # --- Action variant performance ---
         if measure_sm:
-            # Channel effectiveness from state machine terminal states
-            from collections import defaultdict
-            ch_stats = defaultdict(lambda: {"total": 0, "completed": 0, "accepted": 0, "viewed": 0, "presented": 0})
+            variant_stats = defaultdict(lambda: {"total": 0, "accepted": 0, "completed": 0})
+            for r in measure_sm:
+                v = r.get("variant", "unknown")
+                ch = r.get("channel", "?")
+                key = f"{ch.upper()} — {v.replace('_', ' ').title()}"
+                state = r.get("current_state", "")
+                variant_stats[key]["total"] += 1
+                if state in ("ACCEPTED", "COMPLETED"):
+                    variant_stats[key]["accepted"] += 1
+                if state == "COMPLETED":
+                    variant_stats[key]["completed"] += 1
+
+            # Sort by acceptance rate
+            sorted_variants = sorted(variant_stats.items(),
+                                    key=lambda x: x[1]["accepted"] / max(x[1]["total"], 1),
+                                    reverse=True)
+            labels = [k for k, _ in sorted_variants]
+            rates = [v["accepted"] / max(v["total"], 1) for _, v in sorted_variants]
+            hover = [f"{k}<br>Accepted: {v['accepted']}/{v['total']} ({v['accepted']/max(v['total'],1):.0%})<br>"
+                    f"Completed: {v['completed']}/{v['total']}"
+                    for k, v in sorted_variants]
+            colors = [HUMANA_GREEN if r > 0.10 else (NAVY if r > 0.03 else "#94a3b8") for r in rates]
+
+            variants_fig = go.Figure(go.Bar(
+                y=labels, x=rates, orientation="h",
+                marker_color=colors, text=[f"{r:.0%}" for r in rates],
+                textposition="outside", hovertext=hover, hoverinfo="text",
+            ))
+            _styled_fig(variants_fig)
+            variants_fig.update_layout(title="Action Variants Ranked by Acceptance",
+                                      xaxis_title="Acceptance Rate",
+                                      yaxis=dict(autorange="reversed"))
+        else:
+            variants_fig = _empty_fig(f"No actions for {selected_measure} yet")
+
+        # --- Channel effectiveness ---
+        if measure_sm:
+            ch_stats = defaultdict(lambda: {"total": 0, "accepted": 0, "completed": 0})
             for r in measure_sm:
                 ch = r.get("channel", "unknown")
                 state = r.get("current_state", "")
                 ch_stats[ch]["total"] += 1
-                if state in ("PRESENTED", "VIEWED", "ACCEPTED", "COMPLETED", "DECLINED"):
-                    ch_stats[ch]["presented"] += 1
-                if state in ("VIEWED", "ACCEPTED", "COMPLETED", "DECLINED"):
-                    ch_stats[ch]["viewed"] += 1
                 if state in ("ACCEPTED", "COMPLETED"):
                     ch_stats[ch]["accepted"] += 1
                 if state == "COMPLETED":
@@ -782,36 +947,67 @@ def register_callbacks(app):
 
             channels = sorted(ch_stats.keys())
             accept_rates = [ch_stats[c]["accepted"] / max(ch_stats[c]["total"], 1) for c in channels]
+            volumes = [ch_stats[c]["total"] for c in channels]
+            hover = [f"{c.upper()}<br>Volume: {ch_stats[c]['total']}<br>"
+                    f"Accepted: {ch_stats[c]['accepted']} ({ch_stats[c]['accepted']/max(ch_stats[c]['total'],1):.0%})<br>"
+                    f"Completed: {ch_stats[c]['completed']}"
+                    for c in channels]
             eff = go.Figure(go.Bar(
                 x=[c.upper() for c in channels], y=accept_rates,
-                marker_color=HUMANA_GREEN,
+                marker_color=HUMANA_GREEN, hovertext=hover, hoverinfo="text",
             ))
             _styled_fig(eff)
-            eff.update_layout(title=f"Channel Acceptance Rate — {selected_measure}",
-                            yaxis_title="Acceptance Rate")
+            eff.update_layout(title="Channel Acceptance Rate", yaxis_title="Rate")
         else:
-            eff = _empty_fig(f"Channel Effectiveness — {selected_measure} (no data)")
+            eff = _empty_fig(f"No channel data for {selected_measure}")
 
-        # Funnel from state machine
+        # --- Action deployment table ---
         if measure_sm:
-            from collections import Counter
-            state_counts = Counter(r.get("current_state") for r in measure_sm)
-            total = len(measure_sm)
-            presented = sum(state_counts.get(s, 0) for s in ["PRESENTED", "VIEWED", "ACCEPTED", "COMPLETED", "DECLINED"])
-            viewed = sum(state_counts.get(s, 0) for s in ["VIEWED", "ACCEPTED", "COMPLETED", "DECLINED"])
-            accepted = sum(state_counts.get(s, 0) for s in ["ACCEPTED", "COMPLETED"])
-            completed = state_counts.get("COMPLETED", 0)
-            funnel = go.Figure(go.Funnel(
-                y=["Created", "Presented", "Viewed", "Accepted", "Completed"],
-                x=[total, presented, viewed, accepted, completed],
-                marker=dict(color=[NAVY, "#3b82f6", "#8b5cf6", HUMANA_GREEN, "#15803d"]),
-            ))
-            _styled_fig(funnel)
-            funnel.update_layout(title=f"Action Lifecycle Funnel — {selected_measure}")
-        else:
-            funnel = _empty_fig(f"Funnel — {selected_measure} (no data)")
+            action_stats = defaultdict(lambda: {"total": 0, "presented": 0, "viewed": 0,
+                                                "accepted": 0, "completed": 0, "failed": 0, "expired": 0})
+            for r in measure_sm:
+                ch = r.get("channel", "?")
+                v = r.get("variant", "?")
+                key = f"{ch.upper()} | {v.replace('_', ' ').title()}"
+                state = r.get("current_state", "")
+                action_stats[key]["total"] += 1
+                for s in ["PRESENTED", "VIEWED", "ACCEPTED", "COMPLETED", "FAILED", "EXPIRED"]:
+                    if state == s:
+                        action_stats[key][s.lower()] += 1
 
-        return trend, eff, funnel
+            sorted_actions = sorted(action_stats.items(), key=lambda x: x[1]["total"], reverse=True)
+            rows = []
+            for action_name, stats in sorted_actions:
+                accept_rate = stats["accepted"] / max(stats["total"], 1)
+                complete_rate = stats["completed"] / max(stats["total"], 1)
+                # Flag for potential discontinuation
+                flag = ""
+                if stats["total"] > 10 and accept_rate < 0.02:
+                    flag = "⚠️ Consider discontinuing"
+
+                rows.append(html.Tr([
+                    html.Td(action_name, style={"fontWeight": "500", "fontSize": "12px"}),
+                    html.Td(f"{stats['total']:,}"),
+                    html.Td(f"{accept_rate:.0%}", style={
+                        "color": HUMANA_GREEN if accept_rate > 0.10 else ("#f59e0b" if accept_rate > 0.03 else "#ef4444"),
+                        "fontWeight": "600"}),
+                    html.Td(f"{complete_rate:.0%}"),
+                    html.Td(f"{stats['failed'] + stats['expired']}"),
+                    html.Td(flag, style={"color": "#f59e0b", "fontSize": "11px"}),
+                ]))
+
+            action_table = html.Table([
+                html.Thead(html.Tr([
+                    html.Th("Action"), html.Th("Sent"), html.Th("Accept %"),
+                    html.Th("Complete %"), html.Th("Failed"), html.Th("Flag"),
+                ])),
+                html.Tbody(rows),
+            ], style={"width": "100%", "fontSize": "12px"})
+        else:
+            action_table = html.P(f"No actions deployed for {selected_measure} yet",
+                                style={"color": GRAY_TEXT})
+
+        return overview, trend, variants_fig, eff, action_table
 
     # =========================================================================
     # Tab 5: Patient Journey
@@ -1196,21 +1392,37 @@ def register_callbacks(app):
             html.Tbody(rows),
         ], style={"width": "100%", "fontSize": "12px"})
 
-        # --- Terminal state distribution (FIX: define state_counts) ---
-        state_counts = Counter(r.get("current_state") for r in sm_data)
-        total = len(sm_data)
-        completed = state_counts.get("COMPLETED", 0)
-        failed = state_counts.get("FAILED", 0)
-        expired = state_counts.get("EXPIRED", 0)
-        declined = state_counts.get("DECLINED", 0)
-        conv = go.Figure(go.Bar(
-            x=["Completed", "Declined", "Failed", "Expired"],
-            y=[completed / max(total, 1), declined / max(total, 1),
-               failed / max(total, 1), expired / max(total, 1)],
-            marker_color=[HUMANA_GREEN, "#f59e0b", "#ef4444", "#94a3b8"],
-        ))
-        _styled_fig(conv)
-        conv.update_layout(title="Terminal State Distribution", yaxis_title="Rate")
+        # --- Daily gap closure efficiency: closures per action over time ---
+        # Shows whether the model is getting better at picking actions that close gaps
+        metrics = load_cumulative_metrics()
+        if metrics and len(metrics) > 1:
+            conv = go.Figure()
+            days_m = [m["day"] for m in metrics]
+            # Closures per action (efficiency)
+            closures_per_action = []
+            daily_actions_list = []
+            daily_closures_list = []
+            for m in metrics:
+                actions = max(m.get("daily_actions", 1), 1)
+                closures = sum(m.get("gap_closures", {}).values()) if isinstance(m.get("gap_closures"), dict) else 0
+                closures_per_action.append(closures / actions)
+                daily_actions_list.append(actions)
+                daily_closures_list.append(closures)
+
+            conv.add_trace(go.Scatter(x=days_m, y=closures_per_action, mode="lines+markers",
+                                      name="Closures per Action", line=dict(color=HUMANA_GREEN, width=2)))
+            conv.add_trace(go.Bar(x=days_m, y=daily_closures_list, name="Daily Closures",
+                                  marker_color="rgba(0,166,100,0.2)", yaxis="y2"))
+            _styled_fig(conv)
+            conv.update_layout(
+                title="Gap Closure Efficiency (closures per action sent)",
+                xaxis_title="Day",
+                yaxis=dict(title="Closures / Action", side="left"),
+                yaxis2=dict(title="Daily Closures", side="right", overlaying="y"),
+                legend=dict(x=0.01, y=0.99),
+            )
+        else:
+            conv = _empty_fig("Closure efficiency — waiting for data...")
 
         return funnel, ch_funnel, table, conv
 
