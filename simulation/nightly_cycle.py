@@ -23,7 +23,7 @@ from config import (
 )
 from training.data_loader import load_datasets, build_offline_episodes
 from training.cql_trainer import train_cql, ActorCriticCQL
-from training.evaluation import evaluate_agent, compare_models
+from training.evaluation import evaluate_agent, compare_models, evaluate_agent_detailed
 from environment.hedis_env import HEDISEnv
 
 
@@ -97,6 +97,8 @@ def run_nightly_cycle(
     champion: ActorCriticCQL,
     patient_snapshots: list,
     eligibility_snapshots: list,
+    dynamics_model=None,
+    reward_model=None,
     cql_epochs: int = 5,
     eval_episodes: int = 50,
     history_replay_frac: float = 0.05,
@@ -150,26 +152,82 @@ def run_nightly_cycle(
               f"{len(recent_episodes)} recent + {len(replay_episodes)} replay "
               f"= {total_transitions} transitions", flush=True)
 
-    # --- 4. Clone champion and do quick CQL update ---
-    challenger = ActorCriticCQL()
-    challenger.load_state_dict(copy.deepcopy(champion.state_dict()))
+    # --- 4. Online update of world models (dynamics + reward) ---
+    from simulation.logger import get_logger
+    log = get_logger()
 
-    if total_transitions > 10:
-        challenger = train_cql(
-            episodes=training_episodes,
-            agent=challenger,
-            epochs=cql_epochs,
-            batch_size=min(256, max(32, total_transitions // 4)),
-            verbose=False,
+    try:
+        if dynamics_model is not None and total_transitions > 10:
+            import torch
+            dynamics_model.train()
+            opt_d = torch.optim.Adam(dynamics_model.parameters(), lr=5e-4)
+            for ep in today_episodes[:50]:
+                if len(ep["obs"]) < 2:
+                    continue
+                states = torch.FloatTensor(ep["obs"][:-1])
+                actions = torch.LongTensor(ep["actions"][:-1])
+                next_states = torch.FloatTensor(ep["obs"][1:])
+                opt_d.zero_grad()
+                loss = dynamics_model.compute_loss(states, actions, next_states)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(dynamics_model.parameters(), 1.0)
+                opt_d.step()
+
+        if reward_model is not None and total_transitions > 10:
+            import torch
+            reward_model.train()
+            opt_r = torch.optim.Adam(reward_model.parameters(), lr=5e-4)
+            for ep in today_episodes[:50]:
+                if len(ep["obs"]) < 2:
+                    continue
+                states = torch.FloatTensor(ep["obs"])
+                actions = torch.LongTensor(ep["actions"])
+                rewards = torch.FloatTensor(ep["rewards"])
+                labels = (rewards > 0.1).float()
+                days = torch.ones(len(states)) * 7.0
+                opt_r.zero_grad()
+                loss = reward_model.compute_loss(states, actions, days, labels)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(reward_model.parameters(), 1.0)
+                opt_r.step()
+    except Exception as e:
+        log.error(f"World model online update failed: {e}")
+        # Continue — stale models are better than crashing
+
+    # --- 5. Clone champion and do quick CQL update ---
+    try:
+        challenger = ActorCriticCQL()
+        challenger.load_state_dict(copy.deepcopy(champion.state_dict()))
+
+        if total_transitions > 10:
+            challenger = train_cql(
+                episodes=training_episodes,
+                agent=challenger,
+                epochs=cql_epochs,
+                batch_size=min(256, max(32, total_transitions // 4)),
+                verbose=False,
+            )
+    except Exception as e:
+        log.error(f"CQL training failed: {e}")
+        challenger = champion  # Fall back to champion
+
+    # --- 6. Evaluate champion vs challenger on LEARNED world ---
+    try:
+        env = HEDISEnv(
+            patient_snapshots, eligibility_snapshots,
+            dynamics_model=dynamics_model,
+            reward_model=reward_model,
         )
 
-    # --- 5. Evaluate champion vs challenger ---
-    env = HEDISEnv(patient_snapshots, eligibility_snapshots)
+        champion_metrics = evaluate_agent(champion, env, n_episodes=eval_episodes, seed=day * 1000)
+        challenger_metrics = evaluate_agent(challenger, env, n_episodes=eval_episodes, seed=day * 1000)
 
-    champion_metrics = evaluate_agent(champion, env, n_episodes=eval_episodes, seed=day * 1000)
-    challenger_metrics = evaluate_agent(challenger, env, n_episodes=eval_episodes, seed=day * 1000)
-
-    comparison = compare_models(champion_metrics, challenger_metrics)
+        comparison = compare_models(champion_metrics, challenger_metrics)
+    except Exception as e:
+        log.error(f"Evaluation failed: {e}")
+        champion_metrics = {"mean_reward": 0.0, "mean_gaps_closed": 0.0, "no_action_rate": 0.0, "n_episodes": 0, "std_reward": 0.0, "mean_episode_length": 0.0}
+        challenger_metrics = champion_metrics.copy()
+        comparison = {"champion_mean_reward": 0.0, "challenger_mean_reward": 0.0, "relative_improvement": 0.0, "promote_challenger": False, "champion_gaps_closed": 0.0, "challenger_gaps_closed": 0.0}
 
     if verbose:
         print(f"    Champion: {comparison['champion_mean_reward']:.4f} | "
@@ -188,7 +246,19 @@ def run_nightly_cycle(
     else:
         new_champion = champion
 
-    # Save nightly metrics
+    # --- 7. Detailed simulation rollout on the learned world ---
+    winner = new_champion
+    try:
+        sim_detail = evaluate_agent_detailed(winner, env, n_episodes=min(eval_episodes, 100), seed=day * 2000)
+    except Exception as e:
+        log.error(f"Detailed evaluation failed: {e}")
+        sim_detail = {"mean_reward": 0.0, "std_reward": 0.0, "total_actions": 0,
+                      "no_action_count": 0, "no_action_rate": 0.0,
+                      "sim_closure_rates": {}, "sim_channel_rates": {},
+                      "action_dist_by_measure": {}, "action_dist_by_channel": {},
+                      "n_episodes": 0}
+
+    # Save nightly metrics + simulation predictions
     day_dir = os.path.join(SIMULATION_DATA_DIR, f"day_{day:02d}")
     os.makedirs(day_dir, exist_ok=True)
     nightly_metrics = {
@@ -199,9 +269,25 @@ def run_nightly_cycle(
         "promoted": promoted,
         "training_transitions": total_transitions,
         "replay_episodes": len(replay_episodes),
+        # Simulation predictions from learned world
+        "sim_detail": sim_detail,
     }
     with open(os.path.join(day_dir, "nightly_metrics.json"), "w") as f:
         json.dump(nightly_metrics, f, indent=2, default=str)
+
+    # Also save cumulative simulation predictions for dashboard
+    sim_predictions_path = os.path.join(SIMULATION_DATA_DIR, "sim_predictions.json")
+    # Append to existing predictions
+    all_predictions = []
+    if os.path.exists(sim_predictions_path):
+        try:
+            with open(sim_predictions_path) as f:
+                all_predictions = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    all_predictions.append({"day": day, **sim_detail})
+    with open(sim_predictions_path, "w") as f:
+        json.dump(all_predictions, f, indent=2, default=str)
 
     return {
         "new_champion": new_champion,
@@ -209,4 +295,5 @@ def run_nightly_cycle(
         "champion_score": champion_metrics["mean_reward"],
         "challenger_score": challenger_metrics["mean_reward"],
         "comparison": comparison,
+        "sim_detail": sim_detail,
     }

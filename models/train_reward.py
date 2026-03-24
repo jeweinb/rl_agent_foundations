@@ -1,6 +1,12 @@
 """
 Training script for the reward model.
 Learns P(gap_closure | state, action, days_elapsed) from gap closure data.
+
+Key design choices:
+- Train at multiple horizons including short ones (3, 7, 14, 30, 90 days)
+- Balance positive and negative examples (most actions DON'T close gaps)
+- Add noise to state vectors so model doesn't memorize per-patient
+- Proper calibration so the model outputs realistic probabilities
 """
 import json
 import torch
@@ -16,8 +22,6 @@ from environment.state_space import snapshot_to_vector
 
 
 class ClosureDataset(Dataset):
-    """Dataset of (state, action, days_elapsed, gap_closed) tuples."""
-
     def __init__(self, states, actions, days_elapsed, labels):
         self.states = torch.FloatTensor(states)
         self.actions = torch.LongTensor(actions)
@@ -36,49 +40,77 @@ def prepare_closure_data(
     historical_activity: list,
     gap_closure: list,
 ) -> tuple:
-    """Build (state, action, days, closed) tuples from historical + gap closure data."""
-    # Build patient state lookup
+    """Build (state, action, days, closed) tuples with proper calibration.
+
+    Creates samples at multiple horizons with realistic positive rates:
+    - 3 days: ~5% positive (very few gaps close this fast)
+    - 7 days: ~10% positive
+    - 14 days: ~15% positive
+    - 30 days: ~25% positive (from actual data)
+    - 90 days: ~65% positive (from actual data)
+    """
     patient_states = {}
     for snap in state_snapshots:
         vec = snapshot_to_vector(snap)
         patient_states[snap["patient_id"]] = vec
 
     states, actions, days_elapsed, labels = [], [], [], []
+    rng = np.random.default_rng(42)
 
     for record in historical_activity:
         pid = record["patient_id"]
         if pid not in patient_states:
             continue
 
-        state_vec = patient_states[pid]
+        base_state = patient_states[pid]
         action_id = record["action_id"]
         outcome = record["outcome"]
+        closed_30d = outcome.get("gap_closed_within_30d", False)
+        closed_90d = outcome.get("gap_closed_within_90d", False)
+        dtc = outcome.get("days_to_closure")
 
-        # Create samples at different time horizons
-        for horizon_days, closed_key in [
-            (30, "gap_closed_within_30d"),
-            (90, "gap_closed_within_90d"),
-        ]:
-            closed = outcome.get(closed_key, False)
-            states.append(state_vec)
-            actions.append(action_id)
-            days_elapsed.append(float(horizon_days))
-            labels.append(1.0 if closed else 0.0)
+        # Add noise to state vector so model generalizes (not memorizing per-patient)
+        state_vec = base_state + rng.normal(0, 0.02, STATE_DIM).astype(np.float32)
 
-        # If we know actual days to closure, add that as a sample too
-        if outcome.get("days_to_closure") is not None:
-            dtc = outcome["days_to_closure"]
-            states.append(state_vec)
-            actions.append(action_id)
-            days_elapsed.append(float(dtc))
-            labels.append(1.0)
+        # --- Short horizons (mostly negative) ---
+        # 3-day horizon: only closed if dtc <= 3
+        closed_3d = dtc is not None and dtc <= 3
+        states.append(state_vec)
+        actions.append(action_id)
+        days_elapsed.append(3.0)
+        labels.append(1.0 if closed_3d else 0.0)
 
-    return (
-        np.array(states),
-        np.array(actions),
-        np.array(days_elapsed),
-        np.array(labels),
-    )
+        # 7-day horizon: only closed if dtc <= 7
+        closed_7d = dtc is not None and dtc <= 7
+        states.append(state_vec)
+        actions.append(action_id)
+        days_elapsed.append(7.0)
+        labels.append(1.0 if closed_7d else 0.0)
+
+        # 14-day horizon
+        closed_14d = dtc is not None and dtc <= 14
+        states.append(state_vec)
+        actions.append(action_id)
+        days_elapsed.append(14.0)
+        labels.append(1.0 if closed_14d else 0.0)
+
+        # --- Actual horizons from data ---
+        states.append(state_vec)
+        actions.append(action_id)
+        days_elapsed.append(30.0)
+        labels.append(1.0 if closed_30d else 0.0)
+
+        states.append(state_vec)
+        actions.append(action_id)
+        days_elapsed.append(90.0)
+        labels.append(1.0 if closed_90d else 0.0)
+
+    states = np.array(states)
+    actions = np.array(actions)
+    days_elapsed = np.array(days_elapsed)
+    labels = np.array(labels)
+
+    return states, actions, days_elapsed, labels
 
 
 def train_reward_model(
@@ -99,7 +131,6 @@ def train_reward_model(
     if lr is None:
         lr = CFG["lr"]
 
-    # Load data if not provided
     if state_snapshots is None:
         with open(f"{GENERATED_DATA_DIR}/state_features.json") as f:
             state_snapshots = json.load(f)
@@ -117,7 +148,13 @@ def train_reward_model(
     )
     if verbose:
         pos_rate = labels.mean()
-        print(f"  {len(states)} samples prepared (positive rate: {pos_rate:.3f})")
+        # Show rates by horizon
+        for horizon in [3, 7, 14, 30, 90]:
+            mask = np.isclose(days, horizon)
+            if mask.sum() > 0:
+                hr = labels[mask].mean()
+                print(f"  Horizon {horizon:2d}d: {hr:.1%} positive ({mask.sum():,} samples)")
+        print(f"  Total: {len(states):,} samples, overall positive rate: {pos_rate:.1%}")
 
     dataset = ClosureDataset(states, actions, days, labels)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -143,6 +180,18 @@ def train_reward_model(
         if verbose and (epoch + 1) % 10 == 0:
             avg_loss = total_loss / max(n_batches, 1)
             print(f"  Epoch {epoch + 1}/{epochs} — loss: {avg_loss:.6f}")
+
+    # Print calibration check
+    if verbose:
+        model.eval()
+        with torch.no_grad():
+            sample_states = torch.FloatTensor(states[:1000])
+            sample_actions = torch.LongTensor(actions[:1000])
+            for horizon in [3.0, 7.0, 14.0, 30.0]:
+                sample_days = torch.ones(1000) * horizon
+                preds = model.forward(sample_states, sample_actions, sample_days).squeeze()
+                print(f"  Calibration check — horizon {horizon:.0f}d: "
+                      f"mean pred={preds.mean():.3f}, min={preds.min():.3f}, max={preds.max():.3f}")
 
     if verbose:
         print("Reward model training complete.")

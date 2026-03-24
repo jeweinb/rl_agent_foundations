@@ -1,18 +1,18 @@
-"""Tab 2: Real-Time Actions — live action feed, distribution charts, bubble."""
+"""Tab 2: Live System Behavior — actions, lifecycle, leaderboard, budget, Sankey."""
 from dash import html, dcc
 from dashboard.styles import card, row, section_title
 
 
 def create_layout():
     return html.Div([
-        html.H2("Real-Time Actions", style={
+        html.H2("Live System Behavior", style={
             "fontSize": "20px", "fontWeight": "600", "marginBottom": "20px",
         }),
 
-        # Global budget / fatigue gauge
+        # Global budget gauge
         card([
-            section_title("Cohort Message Budget & Fatigue",
-                         "Average budget remaining across all patients. Red = exhausted patients being suppressed."),
+            section_title("Global Message Budget",
+                         "Shared pool across all patients. The agent decides allocation."),
             html.Div(id="global-budget-gauge"),
         ], style={"flex": "none", "marginBottom": "16px"}),
 
@@ -40,6 +40,21 @@ def create_layout():
                      config={"displayModeBar": False}),
         ], style={"flex": "none", "marginBottom": "16px"}),
 
+        # Sankey + distributions row
+        row([
+            card([
+                section_title("Action Lifecycle Flow"),
+                dcc.Graph(id="sm-sankey", style={"height": "380px"},
+                         config={"displayModeBar": False}),
+            ], style={"flex": "3"}),
+            card([
+                section_title("Action Funnel"),
+                dcc.Graph(id="sm-funnel", style={"height": "380px"},
+                         config={"displayModeBar": False}),
+            ], style={"flex": "2"}),
+        ]),
+
+        # Channel / measure / action-vs-noaction
         row([
             card([dcc.Graph(id="action-by-channel", style={"height": "280px"},
                            config={"displayModeBar": False})]),
@@ -49,8 +64,23 @@ def create_layout():
                            config={"displayModeBar": False})]),
         ]),
 
-        card([
-            section_title("Recent Actions"),
-            html.Div(id="recent-actions-table", style={"maxHeight": "350px", "overflowY": "auto"}),
-        ], style={"flex": "none"}),
+        # Channel funnel + conversion rates
+        row([
+            card([dcc.Graph(id="sm-channel-funnel", style={"height": "300px"},
+                           config={"displayModeBar": False})]),
+            card([dcc.Graph(id="sm-conversion-rates", style={"height": "300px"},
+                           config={"displayModeBar": False})]),
+        ]),
+
+        # Recent actions + transitions
+        row([
+            card([
+                section_title("Recent Actions"),
+                html.Div(id="recent-actions-table", style={"maxHeight": "300px", "overflowY": "auto"}),
+            ]),
+            card([
+                section_title("Recent State Transitions"),
+                html.Div(id="sm-transitions-table", style={"maxHeight": "300px", "overflowY": "auto"}),
+            ]),
+        ]),
     ])

@@ -1,6 +1,7 @@
 """
-30-day simulation orchestrator.
+90-day simulation orchestrator.
 Coordinates daily and nightly cycles, tracks metrics, and feeds the dashboard.
+Uses WorldSimulator to encapsulate all business rules.
 """
 import json
 import os
@@ -18,8 +19,7 @@ from training.behavior_cloning import train_behavior_cloning, ActionMaskedPolicy
 from training.cql_trainer import train_cql, ActorCriticCQL
 from simulation.daily_cycle import run_daily_cycle
 from simulation.nightly_cycle import run_nightly_cycle
-from simulation.lagged_rewards import LaggedRewardQueue
-from simulation.action_state_machine import ActionLifecycleTracker
+from simulation.world import WorldSimulator
 from simulation.metrics import MetricsTracker
 from simulation.logger import init_logger
 
@@ -32,8 +32,7 @@ def run_simulation(
     seed: int = 42,
     verbose: bool = True,
 ):
-    """Run the full 30-day simulation."""
-    # Force unbuffered stdout
+    """Run the full simulation."""
     sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure') else None
 
     rng = np.random.default_rng(seed)
@@ -52,8 +51,26 @@ def run_simulation(
     datasets = load_datasets()
     patient_snapshots = datasets["state_features"]
     eligibility_snapshots = datasets["action_eligibility"]
-    log.info(f"Loaded {len(patient_snapshots)} patients")
 
+    # Enrich snapshots with archetype behavioral data
+    patients_path = os.path.join(GENERATED_DATA_DIR, "patients.json")
+    if os.path.exists(patients_path):
+        with open(patients_path) as f:
+            patients_data = json.load(f)
+        patient_lookup = {p["patient_id"]: p for p in patients_data}
+        archetype_fields = ["channel_affinity", "channel_engagement", "overall_responsiveness",
+                           "timing_optimal_days", "timing_decay", "gap_closure_boost", "variant_boost",
+                           "archetype"]
+        for snap in patient_snapshots:
+            p = patient_lookup.get(snap["patient_id"], {})
+            for field in archetype_fields:
+                if field in p:
+                    snap[field] = p[field]
+        log.info(f"Loaded {len(patient_snapshots)} patients (enriched with archetype data)")
+    else:
+        log.info(f"Loaded {len(patient_snapshots)} patients")
+
+    # Build offline episodes for training
     log.info("Building offline episodes...")
     episodes = build_offline_episodes(
         datasets["state_features"],
@@ -62,15 +79,36 @@ def run_simulation(
     )
     log.info(f"Built {len(episodes)} episodes")
 
-    # Phase 1: Behavior Cloning
-    log.phase("Phase 1: Behavior Cloning Training", epochs=bc_epochs)
+    # Phase 1: Train World Models (dynamics + reward)
+    log.phase("Phase 1: Training World Models (dynamics + reward)")
+    from models.train_dynamics import train_dynamics_model
+    from models.train_reward import train_reward_model
+    dynamics_model = train_dynamics_model(
+        state_snapshots=datasets["state_features"],
+        historical_activity=datasets["historical_activity"],
+        epochs=20, verbose=verbose,
+    )
+    reward_model = train_reward_model(
+        state_snapshots=datasets["state_features"],
+        historical_activity=datasets["historical_activity"],
+        gap_closure=datasets.get("gap_closure"),
+        epochs=20, verbose=verbose,
+    )
+    dynamics_path = os.path.join(CHECKPOINTS_DIR, "dynamics_model.pt")
+    reward_path = os.path.join(CHECKPOINTS_DIR, "reward_model.pt")
+    torch.save(dynamics_model.state_dict(), dynamics_path)
+    torch.save(reward_model.state_dict(), reward_path)
+    log.info(f"World models saved: {dynamics_path}, {reward_path}")
+
+    # Phase 2: Behavior Cloning
+    log.phase("Phase 2: Behavior Cloning Training", epochs=bc_epochs)
     bc_policy = train_behavior_cloning(episodes=episodes, epochs=bc_epochs, verbose=verbose)
     bc_path = os.path.join(CHECKPOINTS_DIR, "bc_policy.pt")
     torch.save(bc_policy.state_dict(), bc_path)
     log.info(f"BC policy saved to {bc_path}")
 
-    # Phase 2: Initial CQL
-    log.phase("Phase 2: Initial CQL Fine-Tuning", epochs=min(cql_epochs, 30))
+    # Phase 3: Initial CQL
+    log.phase("Phase 3: Initial CQL Fine-Tuning", epochs=min(cql_epochs, 30))
     champion = train_cql(
         episodes=episodes,
         bc_policy=bc_policy,
@@ -81,195 +119,88 @@ def run_simulation(
     torch.save(champion.state_dict(), champion_path)
     log.phase("v1 model deployed", checkpoint=champion_path)
 
-    # Initialize tracking systems
-    state_machine = ActionLifecycleTracker(rng=rng)
-    lagged_queue = LaggedRewardQueue(rng=rng)
+    # =========================================================================
+    # Create World Simulator (owns all business rules and patient state)
+    # =========================================================================
+    world = WorldSimulator(patient_snapshots, eligibility_snapshots, rng=rng)
+
+    # Warm start patients mid-flight
+    log.info("Warm-starting patient cohort...")
+    warm = world.warm_start(rng)
+    budget_pct = world.budget_remaining / max(world.budget_total, 1) * 100
+    log.info(
+        f"Warm start: {warm['stats']} | "
+        f"Budget: {world.budget_remaining:,}/{world.budget_total:,} ({budget_pct:.0f}%) | "
+        f"Pending rewards: {warm['pending_rewards']} | "
+        f"Day-0 closures: {warm['day0_closures']}"
+    )
+
     metrics = MetricsTracker()
     model_version = 1
-
-    # =========================================================================
-    # WARM START — patients don't all start fresh on day 1
-    # =========================================================================
-    log.info("Warm-starting patient cohort with mid-flight states...")
-    from config import compute_global_budget, AVG_MESSAGES_PER_PATIENT
-
-    # Initialize global budget pool
-    total_budget = compute_global_budget(len(patient_snapshots))
-    global_budget = {
-        "remaining": total_budget,
-        "max": total_budget,
-        "total_sent": 0,
-        "patient_stats": {},
-    }
-    warm_start_stats = {"fresh": 0, "mid_flight": 0, "heavy_contact": 0, "near_exhausted": 0}
-
-    for snap in patient_snapshots:
-        pid = snap["patient_id"]
-        # Randomize each patient's position in their outreach journey
-        journey_stage = rng.random()
-
-        if journey_stage < 0.20:
-            # 20% — Fresh: new to plan or just enrolled, full budget, no history
-            budget_used = 0
-            warm_start_stats["fresh"] += 1
-        elif journey_stage < 0.55:
-            # 35% — Mid-flight: some outreach already done, partial budget
-            budget_used = int(rng.integers(2, 7))
-            warm_start_stats["mid_flight"] += 1
-            # Schedule some in-flight lagged rewards from prior actions
-            n_pending = int(rng.integers(1, 4))
-            open_gaps = snap.get("open_gaps", [])
-            for _ in range(min(n_pending, len(open_gaps))):
-                measure = rng.choice(open_gaps)
-                from datagen.constants import GAP_CLOSURE_BASE_RATES
-                base_prob = GAP_CLOSURE_BASE_RATES.get(measure, 0.5) * 0.12
-                lagged_queue.schedule(
-                    current_day=0, patient_id=pid,
-                    measure=measure, action_id=1,
-                    closure_prob=min(base_prob * 1.5, 0.5),
-                )
-        elif journey_stage < 0.85:
-            # 30% — Heavy contact: been messaged a lot, budget getting low
-            budget_used = int(rng.integers(6, 10))
-            warm_start_stats["heavy_contact"] += 1
-            # More pending rewards
-            n_pending = int(rng.integers(2, 6))
-            open_gaps = snap.get("open_gaps", [])
-            for _ in range(min(n_pending, len(open_gaps))):
-                measure = rng.choice(open_gaps)
-                from datagen.constants import GAP_CLOSURE_BASE_RATES
-                base_prob = GAP_CLOSURE_BASE_RATES.get(measure, 0.5) * 0.12
-                lagged_queue.schedule(
-                    current_day=0, patient_id=pid,
-                    measure=measure, action_id=1,
-                    closure_prob=min(base_prob * 2.0, 0.5),
-                )
-            # Create some in-flight state machine actions
-            for _ in range(int(rng.integers(1, 3))):
-                if open_gaps:
-                    m = rng.choice(open_gaps)
-                    from config import ACTION_IDS_BY_MEASURE
-                    measure_actions = ACTION_IDS_BY_MEASURE.get(m, [1])
-                    aid = int(rng.choice(measure_actions[1:]) if len(measure_actions) > 1 else 1)
-                    from config import ACTION_BY_ID
-                    act = ACTION_BY_ID.get(aid)
-                    if act:
-                        tid = f"warmstart_{pid}_{aid}"
-                        state_machine.create_action(
-                            tid, pid, aid, act.measure, act.channel, act.variant, day=0
-                        )
-                        # Advance to a random mid-state
-                        for _ in range(int(rng.integers(1, 4))):
-                            state_machine.advance(tid, 0)
-        else:
-            # 15% — Near exhausted: very low budget, some gaps already closed
-            budget_used = int(rng.integers(9, 12))
-            warm_start_stats["near_exhausted"] += 1
-            # Some gaps may have closed from prior outreach — simulate by
-            # scheduling high-probability immediate rewards
-            open_gaps = snap.get("open_gaps", [])
-            n_close = int(rng.integers(0, min(3, len(open_gaps) + 1)))
-            for _ in range(n_close):
-                if open_gaps:
-                    measure = rng.choice(open_gaps)
-                    lagged_queue.schedule(
-                        current_day=0, patient_id=pid,
-                        measure=measure, action_id=1,
-                        closure_prob=0.9,  # Very likely already closed
-                    )
-
-        # Track in global budget
-        global_budget["remaining"] -= budget_used
-        global_budget["total_sent"] += budget_used
-        global_budget["patient_stats"][pid] = {
-            "messages_sent": budget_used,
-            "contacts_this_week": 0,
-            "week_start_day": 1,
-            "channels_used": set(),
-            "responses": 0,
-            "last_closure_day": 0,
-        }
-
-    # Process warm-start lagged rewards
-    day0_resolved = lagged_queue.collect(0)
-    day0_closures = sum(1 for r in day0_resolved if r["will_close"])
-
-    budget_pct = global_budget["remaining"] / max(global_budget["max"], 1) * 100
-    log.info(
-        f"Warm start complete: {warm_start_stats} | "
-        f"Global budget: {global_budget['remaining']:,}/{global_budget['max']:,} ({budget_pct:.0f}%) | "
-        f"Pending lagged rewards: {lagged_queue.get_pending_count()} | "
-        f"Day-0 closures: {day0_closures} | "
-        f"In-flight actions: {len(state_machine.actions)}"
-    )
 
     # Save init metrics
     init_metrics = {
         "day": 0, "phase": "initialization", "model_version": model_version,
         "bc_epochs": bc_epochs, "cql_epochs": cql_epochs,
         "cohort_size": len(patient_snapshots),
-        "warm_start": warm_start_stats,
+        "warm_start": warm["stats"],
     }
     with open(os.path.join(SIMULATION_DATA_DIR, "init_metrics.json"), "w") as f:
         json.dump(init_metrics, f, indent=2)
 
     # =========================================================================
-    # DAYS 1-30: Simulation Loop
+    # DAYS 1-N: Simulation Loop
     # =========================================================================
     for day in range(1, n_days + 1):
         log.phase(f"DAY {day}/{n_days}", model_version=model_version)
 
         # --- DAY PHASE ---
-        log.info(f"Day phase: Agent interacting with {len(patient_snapshots)} patients...")
+        try:
+            log.info(f"Day phase: Agent interacting with {len(patient_snapshots)} patients...")
 
-        day_results = run_daily_cycle(
-            day=day,
-            agent=champion,
-            patient_snapshots=patient_snapshots,
-            eligibility_snapshots=eligibility_snapshots,
-            state_machine=state_machine,
-            lagged_queue=lagged_queue,
-            rng=rng,
-            global_budget=global_budget,
-        )
+            day_results = run_daily_cycle(
+                day=day,
+                agent=champion,
+                world=world,
+                rng=rng,
+            )
 
-        # Persist global budget for next day
-        global_budget = day_results.get("global_budget", global_budget)
+            gap_closures_total = sum(day_results["gap_closures"].values())
+            log.metric(
+                f"Day {day}: {day_results['num_actions']} actions, "
+                f"reward={day_results['total_reward']:.2f}, "
+                f"closures={gap_closures_total}, "
+                f"pending={day_results['pending_rewards']}",
+                day=day,
+                actions=day_results["num_actions"],
+                reward=day_results["total_reward"],
+                gap_closures=gap_closures_total,
+            )
 
-        gap_closures_total = sum(day_results["gap_closures"].values())
-        log.metric(
-            f"Day {day} results: {day_results['num_actions']} actions, "
-            f"reward={day_results['total_reward']:.2f}, "
-            f"closures={gap_closures_total}, "
-            f"pending_rewards={day_results['pending_rewards']}",
-            day=day,
-            actions=day_results["num_actions"],
-            reward=day_results["total_reward"],
-            gap_closures=gap_closures_total,
-            pending=day_results["pending_rewards"],
-        )
-
-        funnel = day_results.get("state_machine_funnel", {})
-        log.info(f"State machine: {funnel}")
-        gb = global_budget
-        gb_pct = gb["remaining"] / max(gb["max"], 1) * 100
-        log.info(
-            f"Global budget: {gb['remaining']:,}/{gb['max']:,} ({gb_pct:.0f}% remaining), "
-            f"used today: {day_results.get('global_budget_used', 0) - (gb['total_sent'] - day_results['num_actions'])}"
-        )
+            budget_pct = world.budget_remaining / max(world.budget_total, 1) * 100
+            log.info(f"Budget: {world.budget_remaining:,}/{world.budget_total:,} ({budget_pct:.0f}%)")
+        except Exception as e:
+            log.exception(f"DAY PHASE FAILED on day {day}", exc=e)
+            raise
 
         # --- NIGHT PHASE ---
-        log.info(f"Night phase: Retraining challenger...")
+        try:
+            log.info("Night phase: Dyna-style update...")
 
-        night_results = run_nightly_cycle(
-            day=day,
-            champion=champion,
-            patient_snapshots=patient_snapshots,
-            eligibility_snapshots=eligibility_snapshots,
-            cql_epochs=cql_epochs,
-            eval_episodes=eval_episodes,
-            verbose=verbose,
-        )
+            night_results = run_nightly_cycle(
+                day=day,
+                champion=champion,
+                patient_snapshots=patient_snapshots,
+                eligibility_snapshots=eligibility_snapshots,
+                dynamics_model=dynamics_model,
+                reward_model=reward_model,
+                cql_epochs=cql_epochs,
+                eval_episodes=eval_episodes,
+                verbose=verbose,
+            )
+        except Exception as e:
+            log.exception(f"NIGHT PHASE FAILED on day {day}", exc=e)
+            raise
 
         if night_results["promoted"]:
             champion = night_results["new_champion"]
@@ -282,8 +213,8 @@ def run_simulation(
         else:
             log.info(
                 f"Champion retained. "
-                f"Champion={night_results['champion_score']:.4f}, "
-                f"Challenger={night_results['challenger_score']:.4f}",
+                f"Champ={night_results['champion_score']:.4f}, "
+                f"Chall={night_results['challenger_score']:.4f}",
             )
 
         # Record metrics
@@ -299,8 +230,8 @@ def run_simulation(
             model_version=model_version,
             action_distribution=day_results.get("action_distribution"),
             state_machine_funnel=day_results.get("state_machine_funnel"),
-            avg_budget_remaining=global_budget["remaining"],
-            budget_exhausted_count=0,  # Global budget — no per-patient exhaustion
+            avg_budget_remaining=world.budget_remaining,
+            budget_exhausted_count=0,
         )
 
         # Save cumulative metrics for dashboard
@@ -308,12 +239,11 @@ def run_simulation(
             json.dump(metrics.to_records(), f, indent=2, default=str)
 
         log.metric(
-            f"STARS Score: {day_metrics['stars_score']:.2f} | "
+            f"STARS: {day_metrics['stars_score']:.2f} | "
             f"Cumulative Reward: {day_metrics['cumulative_reward']:.2f} | "
             f"Model: v{model_version}",
             stars=day_metrics["stars_score"],
             cumulative_reward=day_metrics["cumulative_reward"],
-            above_threshold=day_metrics["above_bonus_threshold"],
         )
 
         if day_metrics["above_bonus_threshold"]:

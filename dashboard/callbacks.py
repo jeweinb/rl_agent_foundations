@@ -289,28 +289,42 @@ def register_callbacks(app):
         # Action by channel
         if actions:
             channel_counts = Counter(a.get("channel", "none") for a in actions if a.get("action_id", 0) != 0)
-            ch_fig = go.Figure(go.Bar(x=list(channel_counts.keys()), y=list(channel_counts.values())))
-            ch_fig.update_layout(title="Actions by Channel", margin=dict(l=40, r=20, t=50, b=40))
+            ch_fig = go.Figure(go.Bar(
+                x=[c.upper() for c in channel_counts.keys()],
+                y=list(channel_counts.values()),
+                marker_color=NAVY,
+            ))
+            _styled_fig(ch_fig)
+            ch_fig.update_layout(title="Actions by Channel")
         else:
-            ch_fig = go.Figure()
+            ch_fig = _empty_fig("Actions by Channel — waiting...")
 
-        # Action by measure
+        # Action by measure (with full names in hover)
         if actions:
             measure_counts = Counter(a.get("measure", "none") for a in actions if a.get("action_id", 0) != 0)
-            top_measures = dict(measure_counts.most_common(10))
-            m_fig = go.Figure(go.Bar(x=list(top_measures.keys()), y=list(top_measures.values())))
-            m_fig.update_layout(title="Top Measures Targeted", margin=dict(l=40, r=20, t=50, b=40))
+            top_measures = measure_counts.most_common(10)
+            labels = [m for m, _ in top_measures]
+            values = [c for _, c in top_measures]
+            hover = [f"{m} — {MEASURE_DESCRIPTIONS.get(m, m)}<br>Count: {c}" for m, c in top_measures]
+            m_fig = go.Figure(go.Bar(x=labels, y=values, hovertext=hover, hoverinfo="text",
+                                     marker_color=HUMANA_GREEN))
+            _styled_fig(m_fig)
+            m_fig.update_layout(title="Top Measures Targeted")
         else:
-            m_fig = go.Figure()
+            m_fig = _empty_fig("Measures Targeted — waiting...")
 
         # Action vs no-action
         if actions:
             action_count = sum(1 for a in actions if a.get("action_id", 0) != 0)
             noaction_count = sum(1 for a in actions if a.get("action_id", 0) == 0)
-            pie = go.Figure(go.Pie(labels=["Action", "No Action"], values=[action_count, noaction_count]))
-            pie.update_layout(title="Action vs No-Action", margin=dict(l=20, r=20, t=50, b=20))
+            pie = go.Figure(go.Pie(
+                labels=["Action", "No Action"], values=[action_count, noaction_count],
+                marker=dict(colors=[HUMANA_GREEN, "#e2e8f0"]),
+            ))
+            _styled_fig(pie)
+            pie.update_layout(title="Action vs No-Action")
         else:
-            pie = go.Figure()
+            pie = _empty_fig("Action Distribution — waiting...")
 
         # --- Global Budget Gauge ---
         budget_gauge = html.P("Waiting for budget data...", style={"color": GRAY_TEXT})
@@ -463,41 +477,156 @@ def register_callbacks(app):
         return budget_gauge, leaderboard, table, ch_fig, m_fig, pie
 
     # =========================================================================
-    # Tab 3: Training Performance
+    # Tab 3: Training & Simulation
     # =========================================================================
     @app.callback(
         [Output("champion-challenger", "figure"),
          Output("model-version-timeline", "figure"),
+         Output("sim-performance-summary", "children"),
+         Output("sim-action-distribution", "figure"),
+         Output("sim-closure-predictions", "figure"),
+         Output("sim-channel-effectiveness", "figure"),
+         Output("sim-stars-projection", "figure"),
          Output("promotion-history-table", "children")],
         Input("interval-component", "n_intervals"),
     )
     def update_training(_):
         metrics = load_cumulative_metrics()
+        from dashboard.data_feed import load_sim_predictions
+        sim_preds = load_sim_predictions()
 
-        # Champion vs Challenger
+        # --- Champion vs Challenger ---
         if metrics:
             days = [m["day"] for m in metrics if m.get("champion_score") is not None]
             champ = [m["champion_score"] for m in metrics if m.get("champion_score") is not None]
             chall = [m["challenger_score"] for m in metrics if m.get("challenger_score") is not None]
             cc_fig = go.Figure()
-            cc_fig.add_trace(go.Scatter(x=days, y=champ, mode="lines+markers", name="Champion"))
-            cc_fig.add_trace(go.Scatter(x=days, y=chall, mode="lines+markers", name="Challenger"))
-            cc_fig.update_layout(title="Champion vs Challenger", xaxis_title="Day",
-                               yaxis_title="Mean Reward", margin=dict(l=40, r=20, t=50, b=40))
+            cc_fig.add_trace(go.Scatter(x=days, y=champ, mode="lines+markers", name="Champion",
+                                        line=dict(color=HUMANA_GREEN, width=2)))
+            cc_fig.add_trace(go.Scatter(x=days, y=chall, mode="lines+markers", name="Challenger",
+                                        line=dict(color=NAVY, width=2, dash="dot")))
+            _styled_fig(cc_fig)
+            cc_fig.update_layout(title="Champion vs Challenger (Learned World Reward)",
+                               xaxis_title="Day", yaxis_title="Mean Reward")
         else:
-            cc_fig = _empty_fig("Champion vs Challenger — waiting for data...")
+            cc_fig = _empty_fig("Champion vs Challenger — waiting...")
 
-        # Model version timeline
+        # --- Model version timeline ---
         if metrics:
             days = [m["day"] for m in metrics]
             versions = [m.get("model_version", 1) for m in metrics]
-            mv_fig = go.Figure(go.Scatter(x=days, y=versions, mode="lines+markers"))
-            mv_fig.update_layout(title="Model Version", xaxis_title="Day", yaxis_title="Version",
-                               margin=dict(l=40, r=20, t=50, b=40))
+            mv_fig = go.Figure(go.Scatter(x=days, y=versions, mode="lines+markers",
+                                          line=dict(color=HUMANA_GREEN, width=2),
+                                          fill="tozeroy", fillcolor="rgba(0,166,100,0.1)"))
+            _styled_fig(mv_fig)
+            mv_fig.update_layout(title="Model Version Deployed", xaxis_title="Day", yaxis_title="Version")
         else:
-            mv_fig = go.Figure()
+            mv_fig = _empty_fig("Model versions — waiting...")
 
-        # Promotion history
+        # --- Simulation performance summary ---
+        if sim_preds:
+            latest = sim_preds[-1]
+            no_act_rate = latest.get("no_action_rate", 0)
+            mean_r = latest.get("mean_reward", 0)
+            total_acts = latest.get("total_actions", 0)
+            sim_summary = html.Div([
+                html.Div([
+                    html.Div([
+                        html.Span(f"{mean_r:.3f}", style={"fontSize": "24px", "fontWeight": "700", "color": NAVY}),
+                        html.Span(" predicted reward/episode", style={"fontSize": "13px", "color": GRAY_TEXT}),
+                    ], style={"marginRight": "40px"}),
+                    html.Div([
+                        html.Span(f"{no_act_rate:.0%}", style={"fontSize": "24px", "fontWeight": "700", "color": NAVY}),
+                        html.Span(" strategic silence rate", style={"fontSize": "13px", "color": GRAY_TEXT}),
+                    ], style={"marginRight": "40px"}),
+                    html.Div([
+                        html.Span(f"{total_acts:,}", style={"fontSize": "24px", "fontWeight": "700", "color": NAVY}),
+                        html.Span(f" simulated actions ({latest.get('n_episodes', 0)} episodes)", style={"fontSize": "13px", "color": GRAY_TEXT}),
+                    ]),
+                ], style={"display": "flex", "gap": "20px"}),
+            ])
+        else:
+            sim_summary = html.P("Simulation predictions will appear after first nightly training...",
+                               style={"color": GRAY_TEXT})
+
+        # --- Simulated action distribution by measure ---
+        if sim_preds:
+            latest = sim_preds[-1]
+            dist = latest.get("action_dist_by_measure", {})
+            if dist:
+                measures = sorted(dist.keys(), key=lambda m: dist[m], reverse=True)
+                labels = [f"{m}" for m in measures]
+                values = [dist[m] for m in measures]
+                act_dist = go.Figure(go.Bar(x=labels, y=values, marker_color=HUMANA_GREEN))
+                _styled_fig(act_dist)
+                act_dist.update_layout(title="Predicted Action Mix by Measure")
+            else:
+                act_dist = _empty_fig("No action distribution data yet")
+        else:
+            act_dist = _empty_fig("Waiting for simulation predictions...")
+
+        # --- Simulated closure rates by measure ---
+        if sim_preds:
+            latest = sim_preds[-1]
+            closure_rates = latest.get("sim_closure_rates", {})
+            if closure_rates:
+                measures = sorted(closure_rates.keys())
+                rates = [closure_rates[m] for m in measures]
+                closure_fig = go.Figure(go.Bar(
+                    x=measures, y=rates,
+                    marker_color=[HUMANA_GREEN if r > 0.05 else "#94a3b8" for r in rates],
+                ))
+                _styled_fig(closure_fig)
+                closure_fig.update_layout(title="Predicted Closure Rate by Measure (Learned World)",
+                                        yaxis_title="Closure Rate per Action")
+            else:
+                closure_fig = _empty_fig("No closure predictions yet")
+        else:
+            closure_fig = _empty_fig("Waiting for simulation predictions...")
+
+        # --- Simulated channel effectiveness ---
+        if sim_preds:
+            latest = sim_preds[-1]
+            ch_rates = latest.get("sim_channel_rates", {})
+            if ch_rates:
+                channels = sorted(ch_rates.keys())
+                rates = [ch_rates[c] for c in channels]
+                ch_fig = go.Figure(go.Bar(
+                    x=[c.upper() for c in channels], y=rates,
+                    marker_color=NAVY,
+                ))
+                _styled_fig(ch_fig)
+                ch_fig.update_layout(title="Predicted Channel Effectiveness (Learned World)",
+                                   yaxis_title="Closure Rate per Action")
+            else:
+                ch_fig = _empty_fig("No channel data yet")
+        else:
+            ch_fig = _empty_fig("Waiting for simulation predictions...")
+
+        # --- Simulated STARS projection over time ---
+        if sim_preds and len(sim_preds) > 1:
+            from environment.reward import compute_stars_score
+            sim_days = [p["day"] for p in sim_preds]
+            sim_stars = []
+            for p in sim_preds:
+                rates = p.get("sim_closure_rates", {})
+                if rates:
+                    sim_stars.append(compute_stars_score(rates))
+                else:
+                    sim_stars.append(1.0)
+            stars_proj = go.Figure()
+            stars_proj.add_trace(go.Scatter(x=sim_days, y=sim_stars, mode="lines+markers",
+                                            name="Simulated STARS", line=dict(color=HUMANA_GREEN, width=3)))
+            stars_proj.add_hline(y=4.0, line_dash="dash", line_color="#ef4444",
+                               annotation_text="4★ Bonus")
+            _styled_fig(stars_proj)
+            stars_proj.update_layout(title="STARS Score Projection (Learned World)",
+                                   xaxis_title="Day", yaxis_title="Projected STARS",
+                                   yaxis=dict(range=[1, 5]))
+        else:
+            stars_proj = _empty_fig("STARS projection — waiting for data...")
+
+        # --- Promotion history ---
         if metrics:
             rows = []
             for m in metrics:
@@ -508,19 +637,16 @@ def register_callbacks(app):
                         html.Td(f"{m.get('champion_score', 0):.4f}"),
                         html.Td(f"{m.get('challenger_score', 0):.4f}"),
                     ], style={"backgroundColor": "#e8f5e9"}))
-            if rows:
-                table = html.Table([
-                    html.Thead(html.Tr([
-                        html.Th("Day"), html.Th("New Version"), html.Th("Old Score"), html.Th("New Score"),
-                    ])),
-                    html.Tbody(rows),
-                ], style={"width": "100%"})
-            else:
-                table = html.P("No promotions yet.")
+            table = html.Table([
+                html.Thead(html.Tr([
+                    html.Th("Day"), html.Th("Version"), html.Th("Old Score"), html.Th("New Score"),
+                ])),
+                html.Tbody(rows if rows else [html.Tr([html.Td("No promotions yet", colSpan=4)])]),
+            ], style={"width": "100%"})
         else:
             table = html.P("Waiting for training data...")
 
-        return cc_fig, mv_fig, table
+        return cc_fig, mv_fig, sim_summary, act_dist, closure_fig, ch_fig, stars_proj, table
 
     # =========================================================================
     # Tab 4: Measure Deep Dive — Channel × Measure Chord/Heatmap
@@ -708,8 +834,7 @@ def register_callbacks(app):
          Input("interval-component", "n_intervals")],
     )
     def update_patient_journey(patient_id, _):
-        empty_fig = go.Figure()
-        empty_fig.update_layout(margin=dict(l=20, r=20, t=30, b=20))
+        empty_fig = _empty_fig("Select a patient above...")
 
         if not patient_id:
             return html.P("Select a patient to view their journey."), "", [], empty_fig, empty_fig
@@ -786,112 +911,105 @@ def register_callbacks(app):
             "border": f"1px solid {GRAY_BORDER}",
         })
 
-        # --- Action Cards ---
-        channel_icons = {"sms": "📱", "email": "📧", "portal": "🌐", "app": "📲", "ivr": "📞"}
-        channel_colors = {"sms": "#e3f2fd", "email": "#fff3e0", "portal": "#e8f5e9",
-                         "app": "#fce4ec", "ivr": "#f3e5f5"}
+        # --- Action Cards grouped by week ---
+        ch_icons = {"sms": "📱", "email": "📧", "portal": "🌐", "app": "📲", "ivr": "📞"}
+        ch_bg_colors = {"sms": "#e3f2fd", "email": "#fff3e0", "portal": "#e8f5e9",
+                        "app": "#fce4ec", "ivr": "#f3e5f5"}
+
+        # Group actions by week (skip no-actions)
+        from collections import defaultdict
+        weeks = defaultdict(list)
+        for a in journey:
+            if a.get("action_id", 0) == 0:
+                continue
+            day = a.get("day", 0)
+            week_num = (day - 1) // 7 + 1
+            weeks[week_num].append(a)
+
+        # Find all weeks that have data
+        if weeks:
+            max_week = max(weeks.keys())
+        else:
+            max_week = 1
 
         cards = []
-        for a in journey:
-            action_id = a.get("action_id", 0)
-            eng = a.get("engagement", {})
-            day = a.get("day", "?")
-            measure = a.get("measure")
-            channel = a.get("channel")
-            variant = a.get("variant", "")
-            reward = a.get("reward", 0)
-
-            if action_id == 0:
-                # No-action card (smaller, greyed out)
-                cards.append(html.Div([
-                    html.Div([
-                        html.Span(f"Day {day}", style={"fontWeight": "bold", "fontSize": "11px"}),
-                        html.Span(" ⏸️ No Action", style={"fontSize": "11px", "color": "#888"}),
-                    ]),
-                ], style={
-                    "border": "1px dashed #ccc", "borderRadius": "8px", "padding": "8px 12px",
-                    "backgroundColor": "#fafafa", "minWidth": "120px", "opacity": "0.6",
-                }))
+        for week in range(1, max_week + 1):
+            week_actions = weeks.get(week, [])
+            if not week_actions:
+                # Collapsed placeholder for empty weeks
+                cards.append(html.Div(
+                    f"Week {week} — No actions",
+                    style={"color": GRAY_TEXT, "fontSize": "12px", "padding": "6px 16px",
+                           "borderLeft": f"3px solid {GRAY_BORDER}", "marginBottom": "4px"},
+                ))
                 continue
 
-            # Determine disposition
-            if eng.get("clicked") or eng.get("completed"):
-                disposition_icon = "👍"
-                disposition_text = "Clicked"
-                disposition_color = "#4caf50"
-                card_border = "2px solid #4caf50"
-            elif eng.get("opened"):
-                disposition_icon = "👁️"
-                disposition_text = "Viewed"
-                disposition_color = "#ff9800"
-                card_border = "2px solid #ff9800"
-            elif eng.get("delivered"):
-                disposition_icon = "📬"
-                disposition_text = "Delivered"
-                disposition_color = "#2196f3"
-                card_border = "1px solid #2196f3"
-            elif eng.get("failed"):
-                disposition_icon = "👎"
-                disposition_text = "Failed"
-                disposition_color = "#f44336"
-                card_border = "2px solid #f44336"
-            elif eng.get("expired"):
-                disposition_icon = "⏰"
-                disposition_text = "Expired"
-                disposition_color = "#9e9e9e"
-                card_border = "1px solid #9e9e9e"
-            else:
-                disposition_icon = "📤"
-                disposition_text = "Sent"
-                disposition_color = "#666"
-                card_border = "1px solid #ddd"
+            # Week card with actions inside
+            action_cards_in_week = []
+            for a in week_actions:
+                eng = a.get("engagement", {})
+                day = a.get("day", "?")
+                measure = a.get("measure", "?")
+                measure_full = MEASURE_DESCRIPTIONS.get(measure, measure)
+                channel = a.get("channel", "?")
+                variant = (a.get("variant", "") or "").replace("_", " ").title()
+                reward = a.get("reward", 0)
 
-            ch_icon = channel_icons.get(channel, "❓")
-            ch_bg = channel_colors.get(channel, "#f5f5f5")
+                # Disposition
+                if eng.get("clicked") or eng.get("completed"):
+                    disp_icon, disp_text, disp_color = "👍", "Clicked", "#4caf50"
+                    border = f"2px solid #4caf50"
+                elif eng.get("opened"):
+                    disp_icon, disp_text, disp_color = "👁️", "Viewed", "#ff9800"
+                    border = f"2px solid #ff9800"
+                elif eng.get("delivered"):
+                    disp_icon, disp_text, disp_color = "📬", "Delivered", "#2196f3"
+                    border = f"1px solid #2196f3"
+                elif eng.get("failed"):
+                    disp_icon, disp_text, disp_color = "👎", "Failed", "#f44336"
+                    border = f"2px solid #f44336"
+                else:
+                    disp_icon, disp_text, disp_color = "📤", "Sent", "#666"
+                    border = f"1px solid #ddd"
 
-            # Variant display name
-            variant_display = (variant or "").replace("_", " ").title()
+                action_cards_in_week.append(html.Div([
+                    html.Div([
+                        html.Span(f"Day {day}", style={"fontWeight": "bold", "fontSize": "12px"}),
+                        html.Span(f" {ch_icons.get(channel, '❓')} {channel.upper()}", style={
+                            "fontSize": "11px", "marginLeft": "8px", "color": "#555"}),
+                    ], style={"marginBottom": "4px"}),
+                    html.Div([
+                        html.Span(measure, style={
+                            "backgroundColor": NAVY, "color": "white", "padding": "2px 8px",
+                            "borderRadius": "12px", "fontSize": "10px", "fontWeight": "bold"}),
+                        html.Span(f" {measure_full}", style={"fontSize": "10px", "color": GRAY_TEXT, "marginLeft": "4px"}),
+                    ], style={"marginBottom": "4px"}),
+                    html.Div(variant, style={"fontSize": "11px", "color": "#555", "marginBottom": "4px"}),
+                    html.Div([
+                        html.Span(f"{disp_icon} ", style={"fontSize": "16px"}),
+                        html.Span(disp_text, style={"color": disp_color, "fontWeight": "bold", "fontSize": "12px"}),
+                        html.Span(f" {reward:+.3f}", style={"fontSize": "11px", "color": "#888", "marginLeft": "auto"}),
+                    ], style={"display": "flex", "alignItems": "center"}),
+                ], style={
+                    "border": border, "borderRadius": "8px", "padding": "8px 12px",
+                    "backgroundColor": ch_bg_colors.get(channel, "#f5f5f5"),
+                    "minWidth": "180px", "maxWidth": "220px",
+                    "boxShadow": "0 1px 3px rgba(0,0,0,0.06)",
+                }))
 
-            card = html.Div([
-                # Header: Day + Channel icon
-                html.Div([
-                    html.Span(f"Day {day}", style={"fontWeight": "bold", "fontSize": "12px"}),
-                    html.Span(f" {ch_icon} {(channel or '').upper()}", style={
-                        "fontSize": "12px", "marginLeft": "8px", "color": "#555",
-                    }),
-                ], style={"marginBottom": "6px", "borderBottom": "1px solid #eee", "paddingBottom": "4px"}),
-
-                # Measure badge
-                html.Div([
-                    html.Span(measure or "—", style={
-                        "backgroundColor": NAVY, "color": "white", "padding": "2px 8px",
-                        "borderRadius": "12px", "fontSize": "11px", "fontWeight": "bold",
-                    }),
-                ], style={"marginBottom": "6px"}),
-
-                # Variant description
-                html.Div(variant_display, style={
-                    "fontSize": "11px", "color": "#555", "marginBottom": "8px",
-                    "lineHeight": "1.3",
+            cards.append(html.Div([
+                html.Div(f"Week {week}", style={
+                    "fontWeight": "600", "fontSize": "13px", "color": NAVY,
+                    "marginBottom": "8px", "paddingBottom": "4px",
+                    "borderBottom": f"2px solid {HUMANA_GREEN}",
                 }),
-
-                # Disposition row: icon + text + reward
-                html.Div([
-                    html.Span(f"{disposition_icon} ", style={"fontSize": "18px"}),
-                    html.Span(disposition_text, style={
-                        "color": disposition_color, "fontWeight": "bold", "fontSize": "12px",
-                    }),
-                    html.Span(f"  +{reward:.3f}", style={
-                        "fontSize": "11px", "color": "#888", "marginLeft": "auto",
-                    }),
-                ], style={"display": "flex", "alignItems": "center"}),
-
+                html.Div(action_cards_in_week, style={
+                    "display": "flex", "flexWrap": "wrap", "gap": "10px",
+                }),
             ], style={
-                "border": card_border, "borderRadius": "10px", "padding": "10px 14px",
-                "backgroundColor": ch_bg, "minWidth": "180px", "maxWidth": "220px",
-                "boxShadow": "0 1px 3px rgba(0,0,0,0.1)",
-            })
-            cards.append(card)
+                "background": "white", "borderRadius": "10px", "padding": "12px 16px",
+                "border": f"1px solid {GRAY_BORDER}", "marginBottom": "10px",
+            }))
 
         # --- Reward Curve ---
         rewards = [a.get("reward", 0) for a in journey]
@@ -902,9 +1020,9 @@ def register_callbacks(app):
             cum_rewards.append(total)
         reward_fig = go.Figure()
         reward_fig.add_trace(go.Scatter(y=cum_rewards, mode="lines+markers", name="Cumulative Reward",
-                                        line=dict(color="#2ca02c")))
-        reward_fig.update_layout(title="Cumulative Reward", xaxis_title="Interaction",
-                               yaxis_title="Reward", margin=dict(l=40, r=20, t=50, b=40))
+                                        line=dict(color=HUMANA_GREEN, width=2)))
+        _styled_fig(reward_fig)
+        reward_fig.update_layout(title="Cumulative Reward", xaxis_title="Interaction", yaxis_title="Reward")
 
         # --- Actions by Measure (with full names) ---
         measure_counts = Counter(a.get("measure") for a in journey if a.get("action_id", 0) != 0)
@@ -1000,19 +1118,16 @@ def register_callbacks(app):
         sm_data = load_all_state_machine_data()
 
         if not sm_data:
-            empty = go.Figure()
-            empty.update_layout(title="Waiting for state machine data...")
+            empty = _empty_fig("Waiting for state machine data...")
             return empty, empty, html.P("No data yet"), empty
 
-        # Overall funnel — cumulative "reached this stage or beyond"
-        # Count how many actions reached each stage by looking at state_history
+        # --- Funnel: cumulative "reached this stage or beyond" ---
         total = len(sm_data)
         from simulation.action_state_machine import LIFECYCLE_STAGES
         stage_order = [s.value for s in LIFECYCLE_STAGES]
         reached = {s: 0 for s in stage_order}
         for r in sm_data:
             states_visited = {sh.get("state", sh) for sh in r.get("state_history", [])}
-            # Also count current_state
             states_visited.add(r.get("current_state", ""))
             for s in stage_order:
                 if s in states_visited:
@@ -1020,7 +1135,6 @@ def register_callbacks(app):
 
         funnel_labels = ["Created", "Queued", "Presented", "Viewed", "Accepted", "Completed"]
         funnel_vals = [reached[s] for s in stage_order]
-
         funnel = go.Figure(go.Funnel(
             y=funnel_labels, x=funnel_vals,
             textinfo="value+percent initial",
@@ -1029,7 +1143,7 @@ def register_callbacks(app):
         _styled_fig(funnel)
         funnel.update_layout(title="Action Lifecycle Funnel")
 
-        # Channel funnel
+        # --- Channel conversion rates ---
         channel_states: dict = {}
         for r in sm_data:
             ch = r.get("channel", "unknown")
@@ -1038,35 +1152,39 @@ def register_callbacks(app):
                 channel_states[ch] = Counter()
             channel_states[ch][state] += 1
 
-        ch_funnel = go.Figure()
-        for ch, counts in channel_states.items():
-            presented = counts.get("PRESENTED", 0) + counts.get("VIEWED", 0) + counts.get("ACCEPTED", 0) + counts.get("COMPLETED", 0) + counts.get("DECLINED", 0)
-            viewed = counts.get("VIEWED", 0) + counts.get("ACCEPTED", 0) + counts.get("COMPLETED", 0) + counts.get("DECLINED", 0)
-            accepted = counts.get("ACCEPTED", 0) + counts.get("COMPLETED", 0)
-            completed = counts.get("COMPLETED", 0)
-            total = sum(counts.values())
-            ch_funnel.add_trace(go.Bar(
-                name=ch,
-                x=["Presented", "Viewed", "Accepted", "Completed"],
-                y=[presented / max(total, 1), viewed / max(total, 1),
-                   accepted / max(total, 1), completed / max(total, 1)],
-            ))
-        ch_funnel.update_layout(title="Conversion by Channel", barmode="group",
-                               yaxis_title="Rate", margin=dict(l=40, r=20, t=50, b=40))
+        if channel_states:
+            ch_funnel = go.Figure()
+            for ch, counts in channel_states.items():
+                presented = sum(counts.get(s, 0) for s in ["PRESENTED", "VIEWED", "ACCEPTED", "COMPLETED", "DECLINED"])
+                viewed = sum(counts.get(s, 0) for s in ["VIEWED", "ACCEPTED", "COMPLETED", "DECLINED"])
+                accepted = sum(counts.get(s, 0) for s in ["ACCEPTED", "COMPLETED"])
+                completed = counts.get("COMPLETED", 0)
+                ch_total = sum(counts.values())
+                ch_funnel.add_trace(go.Bar(
+                    name=ch.upper(),
+                    x=["Presented", "Viewed", "Accepted", "Completed"],
+                    y=[presented / max(ch_total, 1), viewed / max(ch_total, 1),
+                       accepted / max(ch_total, 1), completed / max(ch_total, 1)],
+                ))
+            _styled_fig(ch_funnel)
+            ch_funnel.update_layout(title="Conversion by Channel", barmode="group", yaxis_title="Rate")
+        else:
+            ch_funnel = _empty_fig("Channel conversion — waiting for data...")
 
-        # Recent transitions table
+        # --- Recent transitions table ---
         recent = sm_data[-30:]
         rows = []
         for r in reversed(recent):
-            history = r.get("state_history", [])
             current = r.get("current_state", "?")
+            measure = r.get("measure", "")
+            measure_full = f"{measure} — {MEASURE_DESCRIPTIONS.get(measure, '')}" if measure else ""
             rows.append(html.Tr([
                 html.Td(r.get("tracking_id", "")[:25]),
                 html.Td(r.get("patient_id", "")),
-                html.Td(r.get("measure", "")),
-                html.Td(r.get("channel", "")),
+                html.Td(measure_full, style={"fontSize": "11px"}),
+                html.Td(r.get("channel", "").upper()),
                 html.Td(current, style={
-                    "color": "green" if current == "COMPLETED" else ("red" if current in ("FAILED", "EXPIRED") else "black")
+                    "color": HUMANA_GREEN if current == "COMPLETED" else ("#ef4444" if current in ("FAILED", "EXPIRED") else NAVY)
                 }),
                 html.Td(f"Day {r.get('day_created', '?')}"),
             ]))
@@ -1078,7 +1196,8 @@ def register_callbacks(app):
             html.Tbody(rows),
         ], style={"width": "100%", "fontSize": "12px"})
 
-        # Conversion rates
+        # --- Terminal state distribution (FIX: define state_counts) ---
+        state_counts = Counter(r.get("current_state") for r in sm_data)
         total = len(sm_data)
         completed = state_counts.get("COMPLETED", 0)
         failed = state_counts.get("FAILED", 0)
@@ -1088,10 +1207,10 @@ def register_callbacks(app):
             x=["Completed", "Declined", "Failed", "Expired"],
             y=[completed / max(total, 1), declined / max(total, 1),
                failed / max(total, 1), expired / max(total, 1)],
-            marker_color=["green", "orange", "red", "grey"],
+            marker_color=[HUMANA_GREEN, "#f59e0b", "#ef4444", "#94a3b8"],
         ))
-        conv.update_layout(title="Terminal State Distribution", yaxis_title="Rate",
-                         margin=dict(l=40, r=20, t=50, b=40))
+        _styled_fig(conv)
+        conv.update_layout(title="Terminal State Distribution", yaxis_title="Rate")
 
         return funnel, ch_funnel, table, conv
 

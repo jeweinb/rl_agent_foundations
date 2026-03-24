@@ -96,15 +96,12 @@ def build_offline_episodes(
             outcome = record["outcome"]
             measure = record["measure"]
 
-            # Compute reward
-            reward = 0.0
-            if outcome.get("delivered"):
-                reward += REWARD_WEIGHTS["engagement_deliver"]
+            # Compute reward (matches simplified reward function)
+            reward = REWARD_WEIGHTS["action_cost"]
             if outcome.get("clicked"):
-                reward += REWARD_WEIGHTS["engagement_click"]
-            reward += REWARD_WEIGHTS["action_cost"]
+                reward += REWARD_WEIGHTS.get("engagement_click", 0.05)
             if outcome.get("gap_closed_within_30d") and measure:
-                mw = MEASURE_WEIGHTS.get(measure, 1.0)
+                mw = MEASURE_WEIGHTS.get(measure, 1)
                 reward += REWARD_WEIGHTS["gap_closure"] * mw
 
             obs_list.append(state_vec.copy())

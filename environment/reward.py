@@ -1,15 +1,17 @@
 """
-Composite reward function for the HEDIS environment.
-Combines gap closure, engagement signals, action costs, and fatigue penalties.
+Reward function for the HEDIS environment.
+
+SIMPLIFIED: Two clear signals only.
+1. Gap closure = big positive reward (weighted by STARS importance)
+2. Tiny action cost = prevents mindless spam
+
+The model learns to close gaps efficiently. Budget constraint is handled by
+action masking (global budget exhaustion), not reward penalties.
 """
 import numpy as np
 from typing import Optional
 
-from config import (
-    REWARD_WEIGHTS, MEASURE_WEIGHTS,
-    BUDGET_WARNING_THRESHOLD, BUDGET_CRITICAL_THRESHOLD,
-    AVG_MESSAGES_PER_PATIENT,
-)
+from config import REWARD_WEIGHTS, MEASURE_WEIGHTS, MEASURE_CUT_POINTS
 
 
 def compute_reward(
@@ -24,77 +26,35 @@ def compute_reward(
     budget_remaining: int = None,
     budget_max: int = None,
 ) -> float:
-    """Compute the composite reward for a single action.
-
-    The reward function encodes a dual objective:
-    1. Close HEDIS gaps to achieve STARS ≥ 4.0
-    2. Conserve message budget — every message has opportunity cost
-
-    When budget is low, the agent is rewarded for choosing no_action (strategic
-    silence) and penalized for sending low-value messages. This teaches the
-    agent to wait for high-impact moments rather than spamming patients.
+    """Compute reward. Simple: gap closure good, spam bad.
 
     Args:
         measure: HEDIS measure code, or None for no_action.
-        delivered: Whether the message was successfully delivered.
-        opened: Whether the patient opened/answered.
-        clicked: Whether the patient clicked/engaged.
-        gap_closed: Whether the gap was closed (from learned reward model or actual).
-        contacts_this_week: Number of contacts already this week.
-        days_since_same_measure: Days since last contact for same measure.
+        clicked: Whether patient engaged (clicked/accepted).
+        gap_closed: Whether the gap was closed.
         is_no_action: Whether this was the no_action action.
-        budget_remaining: Messages remaining in patient's budget period.
-        budget_max: Max budget for the period.
+        Other args kept for API compatibility.
 
     Returns:
         Scalar reward value.
     """
-    if budget_max is None:
-        budget_max = AVG_MESSAGES_PER_PATIENT * 5000
-    if budget_remaining is None:
-        budget_remaining = budget_max
-
-    budget_frac = budget_remaining / max(budget_max, 1)
-    w = REWARD_WEIGHTS
-
-    # --- No-action reward: strategic silence ---
     if is_no_action:
-        # Reward the agent for conserving budget when it's getting low
-        if budget_frac < BUDGET_WARNING_THRESHOLD:
-            return w["budget_conservation"]
         return 0.0
 
+    w = REWARD_WEIGHTS
     reward = 0.0
 
-    # --- Gap closure reward (weighted by STARS importance) ---
+    # Gap closure — the real objective
     if gap_closed and measure:
-        measure_weight = MEASURE_WEIGHTS.get(measure, 1.0)
+        measure_weight = MEASURE_WEIGHTS.get(measure, 1)
         reward += w["gap_closure"] * measure_weight
 
-    # --- Engagement signals (immediate) ---
-    if delivered:
-        reward += w["engagement_deliver"]
+    # Small engagement bonus
     if clicked:
         reward += w["engagement_click"]
 
-    # --- Action cost (every message costs something) ---
+    # Tiny action cost (prevents sending when there's nothing to gain)
     reward += w["action_cost"]
-
-    # --- Contact fatigue penalty ---
-    if contacts_this_week >= 2:
-        reward += w["fatigue"] * (contacts_this_week - 1)
-    if days_since_same_measure < 7:
-        reward += w["fatigue"]
-
-    # --- Budget-aware penalties ---
-    # When budget is running low, penalize messages that don't produce engagement
-    if budget_frac < BUDGET_CRITICAL_THRESHOLD:
-        # Critical: heavy penalty for any message (save remaining budget for emergencies)
-        reward += w["budget_critical_penalty"]
-    elif budget_frac < BUDGET_WARNING_THRESHOLD:
-        # Warning: penalize messages that don't get clicks (wasteful)
-        if not clicked:
-            reward += w["budget_waste"]
 
     return reward
 
@@ -104,18 +64,9 @@ def measure_rate_to_stars(measure: str, rate: float) -> float:
 
     Uses CMS cut points: each measure has specific thresholds for 2-5 stars.
     Below the 2-star cut point = 1 star.
-
-    Args:
-        measure: HEDIS measure code.
-        rate: Performance rate (0-1).
-
-    Returns:
-        Individual measure star rating (1.0-5.0).
     """
-    from config import MEASURE_CUT_POINTS
     cuts = MEASURE_CUT_POINTS.get(measure)
     if not cuts:
-        # Fallback for unknown measures
         if rate >= 0.80: return 5.0
         if rate >= 0.65: return 4.0
         if rate >= 0.50: return 3.0
@@ -125,7 +76,6 @@ def measure_rate_to_stars(measure: str, rate: float) -> float:
     if rate >= cuts[5]:
         return 5.0
     elif rate >= cuts[4]:
-        # Interpolate between 4 and 5
         return 4.0 + (rate - cuts[4]) / max(cuts[5] - cuts[4], 0.01)
     elif rate >= cuts[3]:
         return 3.0 + (rate - cuts[3]) / max(cuts[4] - cuts[3], 0.01)
@@ -141,17 +91,8 @@ def compute_stars_score(
 ) -> float:
     """Compute the overall STARS score using CMS methodology.
 
-    CMS methodology (2-step process):
-    1. Each measure's performance rate is converted to an individual 1-5 star
-       rating using measure-specific cut points.
-    2. The overall rating is the weighted average of individual measure stars.
-
-    Args:
-        measure_closure_rates: Dict mapping measure -> performance rate (0-1).
-        measure_weights: Dict mapping measure -> weight. Defaults to MEASURE_WEIGHTS.
-
-    Returns:
-        Overall STARS score (1.0-5.0).
+    1. Each measure's rate → individual 1-5 star rating via cut points
+    2. Overall = weighted average of individual stars
     """
     if measure_weights is None:
         measure_weights = MEASURE_WEIGHTS
@@ -160,7 +101,7 @@ def compute_stars_score(
     weighted_star_sum = 0.0
 
     for measure, rate in measure_closure_rates.items():
-        w = measure_weights.get(measure, 1.0)
+        w = measure_weights.get(measure, 1)
         individual_stars = measure_rate_to_stars(measure, rate)
         weighted_star_sum += individual_stars * w
         total_weight += w
@@ -172,12 +113,7 @@ def compute_stars_score(
 
 
 def get_measure_stars_detail(measure_closure_rates: dict) -> dict:
-    """Get individual star ratings and 4-star thresholds for each measure.
-
-    Returns dict mapping measure -> {rate, stars, threshold_4star, at_or_above_4}.
-    Used by the dashboard to show per-measure performance vs target.
-    """
-    from config import MEASURE_CUT_POINTS, MEASURE_WEIGHTS
+    """Get individual star ratings and 4-star thresholds for each measure."""
     detail = {}
     for measure, rate in measure_closure_rates.items():
         cuts = MEASURE_CUT_POINTS.get(measure, {})

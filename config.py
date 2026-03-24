@@ -272,7 +272,7 @@ STATE_DIM = 96  # padded
 # ---------------------------------------------------------------------------
 COHORT_SIZE = 5000
 SIMULATION_DAYS = 90
-MAX_CONTACTS_PER_WEEK = 3
+MAX_CONTACTS_PER_WEEK = 3  # Business rule: max 3 messages per 7-day rolling window
 MIN_DAYS_BETWEEN_SAME_MEASURE = 7
 
 # ---------------------------------------------------------------------------
@@ -310,7 +310,7 @@ CLOSURE_PROB_CAP = 0.5                # Maximum per-interaction closure probabil
 # (high-value, responsive), others get 2 (unresponsive, already closed).
 # This creates a resource allocation problem: don't waste messages on patients
 # who won't respond; concentrate on high-value targets.
-AVG_MESSAGES_PER_PATIENT = 12         # Average messages per patient per quarter
+AVG_MESSAGES_PER_PATIENT = 30         # Average messages per patient per quarter (150k total for 5k cohort)
 BUDGET_WARNING_THRESHOLD = 0.25       # Warn when <25% of global budget remaining
 BUDGET_CRITICAL_THRESHOLD = 0.10      # Heavy penalty when <10% remaining
 
@@ -321,16 +321,12 @@ def compute_global_budget(cohort_size: int) -> int:
 # ---------------------------------------------------------------------------
 # Reward Weights
 # ---------------------------------------------------------------------------
+# Simplified reward: gap closure is the dominant signal.
+# Small shaping rewards guide the agent but never overpower gap closure.
 REWARD_WEIGHTS = {
-    "gap_closure": 1.0,
-    "engagement_deliver": 0.05,
-    "engagement_click": 0.15,
-    "action_cost": -0.005,
-    "fatigue": -0.03,
-    # Budget conservation rewards
-    "budget_conservation": 0.01,      # Small reward for choosing no_action when budget is low
-    "budget_waste": -0.04,            # Penalty for sending low-value messages when budget < 25%
-    "budget_critical_penalty": -0.10, # Harsh penalty for any message when budget < 10%
+    "gap_closure": 1.0,              # The real objective (×1 or ×3 for weighted measures)
+    "engagement_click": 0.05,        # Small bonus for patient engagement
+    "action_cost": -0.002,           # Tiny cost — just enough to prefer no_action over spam
 }
 
 # ---------------------------------------------------------------------------

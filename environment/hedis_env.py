@@ -1,32 +1,40 @@
 """
-HEDIS Gap Closure Gymnasium Environment.
+HEDIS Gap Closure Gymnasium Environment — Model-Based.
 
-Wraps learned dynamics and reward models into a standard Gymnasium interface.
-Used for champion vs challenger evaluation (NOT for CQL training — CQL trains offline).
+The env uses LEARNED models to approximate the world:
+  - Dynamics model: predicts next patient state given (state, action)
+  - Reward model: predicts P(gap_closure | state, action, days_elapsed)
+
+This is the true model-based offline RL approach. The agent is evaluated on
+a learned approximation of the world, not ground truth. CQL's conservatism
+compensates for model error.
+
+For actions/masking, the env uses the real business rules (these are known
+constraints, not something to learn).
 """
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
+import torch
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import (
-    NUM_ACTIONS, STATE_DIM, HEDIS_MEASURES,
+    NUM_ACTIONS, STATE_DIM, HEDIS_MEASURES, MEASURE_WEIGHTS,
     MAX_CONTACTS_PER_WEEK, MIN_DAYS_BETWEEN_SAME_MEASURE,
-    MEASURE_CATEGORIES, LAG_DISTRIBUTIONS,
-    FEAT_IDX_GAP_FLAGS_START,
+    FEAT_IDX_GAP_FLAGS_START, compute_global_budget,
 )
 from environment.action_space import decode_action, is_no_action, get_action_info
-from environment.state_space import snapshot_to_vector
 from environment.action_masking import compute_action_mask
 from environment.reward import compute_reward
 
 
 class HEDISEnv(gym.Env):
     """
-    HEDIS Gap Closure Environment.
+    Model-based HEDIS environment.
 
-    Observation: Dict with 'observations' (Box) and 'action_mask' (MultiBinary)
-    Action: Discrete(NUM_ACTIONS) — 125 curated actions + no_action
+    Uses learned dynamics model for state transitions and learned reward model
+    for gap closure prediction. Business rules (masking, suppression) use
+    ground truth since those are known constraints.
     """
 
     metadata = {"render_modes": ["human"]}
@@ -71,11 +79,8 @@ class HEDISEnv(gym.Env):
         self._open_gaps: set = set()
         self._episode_reward = 0.0
         self._day_of_year = 15
-        # Global message budget (simulated for eval episodes)
-        from config import compute_global_budget
-        cohort = len(self.patient_snapshots)
-        self._budget_max = compute_global_budget(cohort)
-        self._budget_remaining = self._budget_max
+        self._budget_max = 0
+        self._budget_remaining = 0
 
     def reset(
         self,
@@ -84,7 +89,6 @@ class HEDISEnv(gym.Env):
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         super().reset(seed=seed)
 
-        # Select next patient (cycle through cohort)
         if options and "patient_idx" in options:
             self._patient_idx = options["patient_idx"]
         else:
@@ -98,8 +102,13 @@ class HEDISEnv(gym.Env):
         self._open_gaps = set(self._current_snapshot.get("open_gaps", []))
         self._episode_reward = 0.0
         self._day_of_year = options.get("day_of_year", 15) if options else 15
+
+        cohort = len(self.patient_snapshots)
+        self._budget_max = compute_global_budget(cohort)
         self._budget_remaining = self._budget_max
 
+        # Build initial state vector from snapshot
+        from environment.state_space import snapshot_to_vector
         self._state_vector = snapshot_to_vector(
             self._current_snapshot,
             action_history=self._action_history,
@@ -126,35 +135,49 @@ class HEDISEnv(gym.Env):
         measure, channel, variant = get_action_info(action)
         no_act = is_no_action(action)
 
-        # Simulate engagement outcome
-        delivered, opened, clicked = False, False, False
-        if not no_act:
-            delivered = self.np_random.random() < self._get_delivery_prob(channel)
-            if delivered:
-                opened = self.np_random.random() < self._get_open_prob(channel)
-                if opened:
-                    clicked = self.np_random.random() < self._get_click_prob(channel)
+        # --- State transition via LEARNED dynamics model ---
+        if not no_act and self.dynamics_model is not None:
+            action_arr = np.array([action], dtype=np.int64)
+            state_arr = self._state_vector.reshape(1, -1)
+            next_state = self.dynamics_model.predict(state_arr, action_arr, add_noise=True)
+            self._state_vector = next_state.flatten().astype(np.float32)
+        elif not no_act:
+            # Fallback: small random perturbation
+            self._state_vector += self.np_random.normal(0, 0.01, STATE_DIM).astype(np.float32)
+            self._state_vector = np.clip(self._state_vector, -5.0, 5.0)
 
-        # Predict gap closure using reward model or heuristic
+        # --- Gap closure prediction via LEARNED reward model ---
+        # Each step represents ~1 day. Query the model at a per-step horizon.
+        # This gives realistic per-interaction closure probabilities.
         gap_closed = False
         if not no_act and measure in self._open_gaps:
-            closure_prob = self._predict_closure(measure, channel, clicked)
+            if self.reward_model is not None:
+                state_arr = self._state_vector.reshape(1, -1)
+                action_arr = np.array([action])
+                # Query at 7-day horizon — "will this action lead to closure within a week?"
+                days_arr = np.array([7.0], dtype=np.float32)
+                closure_prob = float(self.reward_model.predict(state_arr, action_arr, days_arr)[0])
+                # Cap to prevent unrealistic 90%+ closure per interaction
+                closure_prob = min(closure_prob, 0.15)
+            else:
+                # Conservative fallback
+                from datagen.constants import GAP_CLOSURE_BASE_RATES
+                closure_prob = GAP_CLOSURE_BASE_RATES.get(measure, 0.5) * 0.02
+
             gap_closed = self.np_random.random() < closure_prob
             if gap_closed:
                 self._open_gaps.discard(measure)
+                # Update gap flags in state vector
+                if measure in HEDIS_MEASURES:
+                    gap_idx = FEAT_IDX_GAP_FLAGS_START + HEDIS_MEASURES.index(measure)
+                    self._state_vector[gap_idx] = 0.0
 
-        # Compute reward (budget-aware)
+        # Compute reward
         reward = compute_reward(
             measure=measure,
-            delivered=delivered,
-            opened=opened,
-            clicked=clicked,
+            clicked=self.np_random.random() < 0.15 if not no_act else False,
             gap_closed=gap_closed,
-            contacts_this_week=self._contacts_this_week,
-            days_since_same_measure=self._recent_measures.get(measure, 999) if measure else 999,
             is_no_action=no_act,
-            budget_remaining=self._budget_remaining,
-            budget_max=self._budget_max,
         )
         self._episode_reward += reward
 
@@ -173,11 +196,8 @@ class HEDISEnv(gym.Env):
         for m in list(self._recent_measures.keys()):
             self._recent_measures[m] += 1
 
-        # Update state via dynamics model or heuristic
-        self._update_state(action, gap_closed)
-
         # Termination
-        terminated = len(self._open_gaps) == 0  # All gaps closed
+        terminated = len(self._open_gaps) == 0
         truncated = self._step_count >= self.max_steps
 
         obs = {
@@ -190,9 +210,9 @@ class HEDISEnv(gym.Env):
             "measure": measure,
             "channel": channel,
             "variant": variant,
-            "delivered": delivered,
-            "opened": opened,
-            "clicked": clicked,
+            "delivered": not no_act,
+            "opened": not no_act and self.np_random.random() < 0.4,
+            "clicked": not no_act and self.np_random.random() < 0.15,
             "gap_closed": gap_closed,
             "open_gaps": list(self._open_gaps),
             "episode_reward": self._episode_reward,
@@ -203,14 +223,14 @@ class HEDISEnv(gym.Env):
         return obs, reward, terminated, truncated, info
 
     def _compute_mask(self) -> np.ndarray:
-        """Compute current action mask."""
+        """Compute action mask using real business rules."""
         engagement = self._current_snapshot.get("engagement", {})
         channel_availability = {
             "sms": engagement.get("sms_consent", False),
             "email": engagement.get("email_available", False),
             "portal": engagement.get("portal_registered", False),
             "app": engagement.get("app_installed", False),
-            "ivr": True,  # IVR always available
+            "ivr": True,
         }
         return compute_action_mask(
             open_gaps=self._open_gaps,
@@ -219,54 +239,3 @@ class HEDISEnv(gym.Env):
             recent_measures=self._recent_measures,
             budget_remaining=self._budget_remaining,
         )
-
-    def _update_state(self, action: int, gap_closed: bool):
-        """Update internal state vector using dynamics model or heuristic."""
-        if self.dynamics_model is not None:
-            # Use learned dynamics model
-            action_tensor = np.array([action], dtype=np.int64)
-            state_tensor = self._state_vector.reshape(1, -1)
-            next_state = self.dynamics_model.predict(state_tensor, action_tensor)
-            self._state_vector = next_state.flatten()
-        else:
-            # Heuristic state transition
-            self._state_vector = snapshot_to_vector(
-                self._current_snapshot,
-                action_history=self._action_history,
-                day_of_year=self._day_of_year,
-                budget_remaining=self._budget_remaining,
-                budget_max=self._budget_max,
-            )
-            # Update gap flags in state vector
-            gap_start_idx = FEAT_IDX_GAP_FLAGS_START
-            for i, m in enumerate(HEDIS_MEASURES):
-                self._state_vector[gap_start_idx + i] = 1.0 if m in self._open_gaps else 0.0
-
-    def _predict_closure(self, measure: str, channel: str, clicked: bool) -> float:
-        """Predict gap closure probability."""
-        if self.reward_model is not None:
-            # Use learned reward model
-            state_tensor = self._state_vector.reshape(1, -1)
-            # Would call reward_model.predict(state, action, days) here
-            return 0.05  # Placeholder
-        else:
-            # Heuristic closure probability
-            from datagen.constants import GAP_CLOSURE_BASE_RATES, OUTREACH_LIFT
-            base = GAP_CLOSURE_BASE_RATES.get(measure, 0.5)
-            lift = OUTREACH_LIFT.get(channel, 1.0)
-            daily_prob = 1 - (1 - base * lift) ** (1 / 365)
-            if clicked:
-                daily_prob *= 3.0
-            return min(daily_prob * 5, 0.3)  # Cap at 30% per interaction
-
-    def _get_delivery_prob(self, channel: str) -> float:
-        from datagen.constants import DELIVERY_RATES
-        return DELIVERY_RATES.get(channel, 0.9)
-
-    def _get_open_prob(self, channel: str) -> float:
-        from datagen.constants import OPEN_RATES
-        return OPEN_RATES.get(channel, 0.3)
-
-    def _get_click_prob(self, channel: str) -> float:
-        from datagen.constants import CLICK_RATES
-        return CLICK_RATES.get(channel, 0.1)

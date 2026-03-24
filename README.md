@@ -38,7 +38,8 @@ open http://localhost:8050
 ./run.sh                 # Full start (same as ./run.sh start)
 ./run.sh start           # Stop existing → generate data if needed → start dashboard + simulation
 ./run.sh stop            # Gracefully stop all processes (auto-cleans stale PIDs)
-./run.sh restart         # Stop + fresh start
+./run.sh restart         # Stop + fresh start (wipes simulation data)
+./run.sh hot             # Hot-restart dashboard only (simulation keeps running)
 ./run.sh status          # Show what's running, current STARS score, simulation day
 ./run.sh dashboard       # Start only the dashboard
 ./run.sh simulate        # Start only the simulation (data must exist)
@@ -392,60 +393,115 @@ Each action is a realistic **(measure, channel, content_variant)** tuple. 5 chan
 
 Action 0 is always `no_action` — the agent can choose strategic silence.
 
+## Patient Archetypes (12 Behavioral Segments)
+
+Mock data is generated from 12 latent patient archetypes. Each archetype defines a behavioral profile — channel preferences, measure responsiveness, timing sensitivity, and overall engagement level. The RL model must discover these segments from the data and learn to match actions to patient types.
+
+| # | Archetype | % | Best Channel | Best Measures | Behavior |
+|:-:|-----------|:-:|-------------|--------------|----------|
+| 1 | **Digital Native** | 8% | App, Portal | Med adherence, Screenings | Younger MA member, tech-savvy, uses app daily. Responds to gamification and in-app refill tools. |
+| 2 | **Proactive Health Manager** | 10% | Email, Portal | Screenings, Vaccines, Chronic | Self-directed. Reads educational content. Books own appointments from email links. |
+| 3 | **SMS-First Responder** | 12% | SMS | Vaccines, Med adherence | Only reads texts. Ignores email and app notifications entirely. Short scheduling links work best. |
+| 4 | **Refill Reminder Responder** | 10% | SMS | Med adherence (**2.2×** boost) | Responds ONLY to refill reminders. Ignores screening/education content. |
+| 5 | **Phone Caller** | 8% | IVR | Care coordination, Vaccines | Older (80+), prefers voice calls. Distrusts digital. Answers IVR and talks to care navigators. |
+| 6 | **Diabetic Engager** | 10% | SMS, App | Chronic (**2.0×**), Med adherence | Diabetic who responds to condition-specific outreach. Likes home monitoring offers. |
+| 7 | **Cardiac Risk Patient** | 8% | Email, IVR | Chronic (**1.8×**), Med adherence | High CHD/CHF risk. Responds to BP and cholesterol management. Needs care coordination. |
+| 8 | **Behavioral Health Seeker** | 6% | Portal, App | Mental health (**2.5×**!) | Depression/anxiety. Prefers privacy of portal. Responds to telehealth links and PHQ-9 screening tools. |
+| 9 | **Passive Ignorer** | 10% | None (all < 15%) | All low | Rarely responds to any channel. Best strategy: skip this patient and conserve budget. |
+| 10 | **Incentive-Motivated** | 6% | SMS | Screenings (via incentive_offer **3×**) | Only responds to financial incentives ($50 offers, free devices). Ignores educational content. |
+| 11 | **New Enrollee** | 6% | Mixed | All moderate | Recently enrolled, many open gaps, unknown preferences. Welcome window — responds well if contacted early. |
+| 12 | **Post-Discharge Complex** | 6% | IVR | Care coordination (**2.5×**) | Recently hospitalized, high readmission risk. Needs immediate IVR follow-up and care navigator transfer. |
+
+**How archetypes create learnable structure:**
+
+Each archetype has specific distributions for:
+- **Channel affinity** — probability of opening/clicking per channel (e.g., Digital Native: app 85%, IVR 10%)
+- **Channel engagement** — conversion rate per channel (e.g., Phone Caller: IVR 50%, email 5%)
+- **Overall responsiveness** — base engagement multiplier (Proactive: 0.70, Passive: 0.12)
+- **Timing sensitivity** — optimal contact interval and decay for over-contact (Phone Caller: 21 days, Passive: 30 days)
+- **Measure category boost** — multiplier on gap closure probability per measure type (Refill Responder: med adherence 2.2×, screenings 0.7×)
+- **Variant boost** — some archetypes only respond to specific content types (Incentive-Motivated: `incentive_offer` 3×, `zero_cost_reminder` 2×)
+
+The model that learns these patterns will:
+- Send **app refill reminders** to Digital Natives
+- Send **SMS pharmacy locators** to SMS-First Responders
+- Send **portal PHQ-9 screening tools** to Behavioral Health Seekers
+- Send **IVR care navigator transfers** to Post-Discharge Complex patients
+- **Skip** Passive Ignorers entirely (conserve global budget)
+- Send **$50 incentive offers** (not educational content) to Incentive-Motivated patients
+
 ## Model Architecture — Actor-Critic CQL
 
-```
-┌──────────────────────┐
-│        Actor          │   Policy: π(a|s) with action masking
-│  96 → 256 → 256 → 125│   Masked softmax → invalid actions get P = 0
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐   ┌──────────────────────┐
-│     Critic Q1         │   │     Critic Q2         │   Twin Q-Networks
-│  96 → 256 → 256 → 125│   │  96 → 256 → 256 → 125│   Q = min(Q1, Q2)
-└──────────┬───────────┘   └──────────┬───────────┘
-           └──────────┬───────────────┘
-                      ▼
-              CQL Penalty:
-              LogSumExp(Q_valid) − Q(s, a_data)
-              Pushes Q-values down for OOD actions
+```mermaid
+graph TD
+    S[State Vector 96-dim] --> A[Actor Network<br/>96→256→256→125<br/>Masked Softmax π&#40;a|s&#41;]
+    S --> Q1[Critic Q1<br/>96→256→256→125]
+    S --> Q2[Critic Q2<br/>96→256→256→125]
+    Q1 --> MIN[Q = min&#40;Q1, Q2&#41;<br/>Conservative Estimate]
+    Q2 --> MIN
+    MIN --> CQL[CQL Penalty<br/>LogSumExp&#40;Q_valid&#41; − Q&#40;s, a_data&#41;]
+    A --> ACTION[Selected Action]
+    MASK[Action Mask<br/>125 booleans] --> A
 ```
 
 **Training pipeline:**
-1. **Behavior Cloning** — initialize actor from historical outreach data
-2. **CQL Fine-Tuning** — conservative offline RL with SAC backbone + twin critics
-3. **Nightly Dyna Updates** — fresh daily experience + 5% historical replay + recent 3 days, quick 5-epoch update, champion/challenger evaluation
+1. **World Models** — train dynamics model (next state prediction) and reward model (gap closure prediction) on historical data
+2. **Behavior Cloning** — initialize actor from historical outreach data
+3. **CQL Fine-Tuning** — conservative offline RL with SAC backbone + twin critics
+4. **Nightly Dyna Updates** — fresh daily experience + 5% historical replay + recent 3 days, quick 5-epoch update on CQL agent + online updates to dynamics/reward models, champion/challenger evaluation on learned world (HEDISEnv)
 
-## Message Budget & Strategic Silence
+## Reward Function
 
-Each patient has **12 messages per quarter**. The agent sees budget as 4 state features and learns:
-- **Budget > 50%** — act normally
-- **Budget < 25%** — penalized for messages that don't produce clicks (waste penalty)
-- **Budget < 10%** — heavy penalty for any message (save for emergencies)
-- **Budget = 0** — all actions masked, only no_action available
+Simplified for clear learning signal:
+
+```
+R(s, a) = gap_closure × measure_weight    (1 or 3 for triple-weighted measures)
+         + 0.05 × clicked                  (small engagement bonus)
+         − 0.002                            (tiny action cost to prefer silence over spam)
+```
+
+No-action = 0 reward. Budget constraint is handled by action masking (global budget exhaustion), not reward penalties.
+
+## Message Budget
+
+**Global shared pool**: `30 × cohort_size` messages for the quarter (150k for 5k patients). The agent decides allocation — some patients get 40+ messages, others get 2. When budget hits 0, all actions are masked for all patients.
+
+The agent sees 10 budget/contact features in the state vector:
+- Global budget remaining (normalized), utilization rate, warning/critical flags
+- Per-patient: messages received vs average, historical response rate, gap urgency, days since last closure, channel diversity
 
 ## Action Lifecycle State Machine
 
-```
-CREATED → QUEUED → PRESENTED → VIEWED → ACCEPTED → COMPLETED
-                            ↘ EXPIRED      ↘ DECLINED
-                   ↘ FAILED
+```mermaid
+stateDiagram-v2
+    [*] --> CREATED
+    CREATED --> QUEUED
+    QUEUED --> PRESENTED
+    QUEUED --> FAILED
+    PRESENTED --> VIEWED
+    PRESENTED --> EXPIRED
+    VIEWED --> ACCEPTED
+    VIEWED --> DECLINED
+    ACCEPTED --> COMPLETED
+    ACCEPTED --> FAILED
+    COMPLETED --> [*]
+    FAILED --> [*]
+    DECLINED --> [*]
+    EXPIRED --> [*]
 ```
 
-Channel-specific transition probabilities (e.g., SMS: 95% delivery, 82% open; IVR: 70% delivery, 20% acceptance). Feeds engagement signals to reward computation and eligibility constraints.
+Channel-specific transition probabilities (e.g., SMS: 95% delivery, 82% open; IVR: 70% delivery, 20% acceptance). Feeds engagement signals back to the simulation.
 
-## Dashboard (7 Tabs)
+## Dashboard (6 Tabs)
 
 | Tab | Content |
 |-----|---------|
-| **STARS Overview** | Gauge, trajectory, cumulative reward, regret curve, gap closure heatmap, per-measure table with CMS cut points + progress bars |
-| **Real-Time Actions** | Action leaderboard (toggle Q-value / acceptance / completion ranking), global budget gauge, channel/measure distributions |
-| **Training** | Champion vs challenger scores, model version timeline, promotion history |
-| **Measures** | Channel × measure effectiveness heatmap, per-measure closure trend with 4★/5★ cut point lines, lifecycle funnel |
-| **Patient Journey** | Interactive action cards with channel icons + disposition (👍/👁️/📬/👎), budget bar, cumulative reward |
-| **Action Lifecycle** | Sankey flow diagram, cumulative funnel, per-channel conversion rates |
-| **Logs** | Real-time simulation log stream with level filtering |
+| **STARS Overview** | Gauge (target 4.0), trajectory, cumulative reward, regret curve, gap closure heatmap by measure, per-measure table with CMS cut points + progress bars + individual star ratings |
+| **Live Behavior** | Global budget gauge (shared pool), action leaderboard (toggle: Q-value / acceptance / completion), Sankey lifecycle flow, action funnel, channel/measure distributions, recent actions + state transitions |
+| **Training & Simulation** | Champion vs challenger reward curves, model version timeline, promotion history. **Learned world predictions**: predicted action mix, closure rates by measure, channel effectiveness, STARS projection — "what happens if we deploy this model tomorrow" |
+| **Measures** | Channel × measure effectiveness heatmap, per-measure closure trend with 4★/5★ CMS cut point lines, per-measure lifecycle funnel |
+| **Patient Journey** | Interactive action cards (channel icons, measure badges, disposition 👍/👁️/📬/👎), messages received vs cohort average, cumulative reward curve |
+| **Logs** | Real-time simulation log stream with level filtering (PHASE, METRIC, INFO, ERROR) |
 
 ## Tests
 
@@ -468,93 +524,122 @@ scipy>=1.11.0        scikit-learn>=1.3.0
 
 ## System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────────┐
-│                              CONFIGURATION (config.py)                               │
-│  18 HEDIS measures + weights + CMS cut points · 125 action catalog                  │
-│  Channel mappings · Feature indices · Reward weights · CQL hyperparams              │
-│  Budget params · Lag distributions · Closure probability factors                     │
-└──────┬──────────────┬───────────────┬───────────────┬──────────────┬────────────────┘
-       │              │               │               │              │
-       ▼              ▼               ▼               ▼              ▼
-┌─────────────┐ ┌───────────┐ ┌─────────────┐ ┌───────────┐ ┌──────────────┐
-│  DATA GEN   │ │ENVIRONMENT│ │  TRAINING   │ │  MODELS   │ │  SIMULATION  │
-│  datagen/   │ │environment│ │  training/  │ │  models/  │ │  simulation/ │
-├─────────────┤ ├───────────┤ ├─────────────┤ ├───────────┤ ├──────────────┤
-│patients.py  │ │action_    │ │data_loader  │ │dynamics_  │ │loop.py       │
-│state_       │ │  space.py │ │  .py        │ │  model.py │ │  orchestrator│
-│  features.py│ │state_     │ │behavior_    │ │reward_    │ │daily_cycle   │
-│historical_  │ │  space.py │ │  cloning.py │ │  model.py │ │  .py         │
-│  activity.py│ │action_    │ │cql_trainer  │ │train_     │ │nightly_cycle │
-│gap_closure  │ │  masking  │ │  .py        │ │  dynamics │ │  .py         │
-│  .py        │ │  .py      │ │evaluation   │ │  .py      │ │lagged_       │
-│action_      │ │reward.py  │ │  .py        │ │train_     │ │  rewards.py  │
-│  eligibility│ │hedis_env  │ │             │ │  reward   │ │action_state_ │
-│  .py        │ │  .py      │ │             │ │  .py      │ │  machine.py  │
-│generator.py │ │           │ │             │ │           │ │metrics.py    │
-│             │ │           │ │             │ │           │ │logger.py     │
-└──────┬──────┘ └─────┬─────┘ └──────┬──────┘ └─────┬─────┘ └───────┬──────┘
-       │              │              │               │               │
-       ▼              │              │               │               │
-  ┌─────────┐         │              │               │               │
-  │  JSON   │         │              │               │               │
-  │  DATA   │◄────────┼──────────────┼───────────────┘               │
-  │  STORE  │         │              │                               │
-  ├─────────┤         │              │     ┌────────────────┐        │
-  │generated│         │              ├────▶│  PyTorch       │        │
-  │ ├ state_│         │              │     │  Checkpoints   │        │
-  │ │ feats │◄────────┤              │     │ ├ bc_policy.pt │        │
-  │ ├ histor│         │              │     │ ├ champion.pt  │◄───────┤
-  │ │ ical  │────────▶│              │     │ └ challenger_  │        │
-  │ ├ gap_  │         │    ┌─────────┤     │   day_XX.pt   │        │
-  │ │ closur│         │    │         │     └────────────────┘        │
-  │ └ eligib│         │    │         │                               │
-  │         │         │    │         │                               │
-  │simulat° │         │    │         │                               │
-  │ ├ cumul_│◄────────┼────┼─────────┼───────────────────────────────┤
-  │ │ metric│         │    │         │                               │
-  │ ├ sm_   │         │    │         │                               │
-  │ │ cumul │         │    │         │                               │
-  │ ├ day_XX│         │    │         │                               │
-  │ │├action│         │    │         │                               │
-  │ │├experi│         │    │         │                               │
-  │ │├sm.jsn│         │    │         │                               │
-  │ │└night_│         │    │         │                               │
-  │ └ log.  │         │    │         │                               │
-  │   jsonl │         │    │         │                               │
-  └────┬────┘         │    │         │                               │
-       │              │    │         │                               │
-       ▼              │    │         │                               │
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │                        DASHBOARD (dashboard/)                       │
-  │                        Plotly Dash · localhost:8050                  │
-  ├─────────────────────────────────────────────────────────────────────┤
-  │  theme.py · styles.py · data_feed.py · callbacks.py · app.py       │
-  │                                                                     │
-  │  ┌──────────┬──────────┬──────────┬──────────┬─────────┬─────────┐ │
-  │  │ STARS    │ Actions  │Training  │Measures  │Patient  │Action   │ │
-  │  │ Overview │ Realtime │Performnce│Deep Dive │Journey  │Lifecycl │ │
-  │  │          │          │          │          │         │+ Logs   │ │
-  │  │ Gauge    │Leaderbd  │Champ vs  │Ch×Meas   │Action   │Sankey   │ │
-  │  │ Traject  │(Q-val /  │Challenger│Heatmap   │Cards    │Funnel   │ │
-  │  │ Heatmap  │ accept / │Model ver │Closure   │Budget   │Conversi │ │
-  │  │ Measure  │ complete)│Promotion │Trend     │Bar      │Recent   │ │
-  │  │ Table    │Budget    │History   │Funnel    │Reward   │Transiti │ │
-  │  │ w/ CMS   │Gauge     │          │          │Curve    │         │ │
-  │  │ cutpoint │Channel   │          │          │         │         │ │
-  │  │ progress │distribtn │          │          │         │         │ │
-  │  └──────────┴──────────┴──────────┴──────────┴─────────┴─────────┘ │
-  │                                                                     │
-  │  Polls data/simulation/ every 5 seconds via dcc.Interval            │
-  └─────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph CONFIG["config.py — Central Configuration"]
+        C1[18 HEDIS Measures + CMS Cut Points]
+        C2[125 Action Catalog]
+        C3[12 Patient Archetypes]
+        C4[Reward Weights · Budget Params]
+    end
 
-Data Flow:
-  datagen/ ──generates──▶ data/generated/ (JSON)
-  data/generated/ ──loaded by──▶ training/ (builds episodes)
-  training/ ──produces──▶ checkpoints/ (PyTorch .pt files)
-  simulation/loop.py ──orchestrates──▶ daily_cycle + nightly_cycle
-  daily_cycle ──writes──▶ data/simulation/day_XX/ (JSON per day)
-  nightly_cycle ──reads checkpoints, writes new──▶ checkpoints/
-  dashboard/ ──reads──▶ data/simulation/ (5s polling)
-  dashboard/ ──reads──▶ checkpoints/ (for Q-value leaderboard)
+    subgraph DATAGEN["datagen/ — Mock Data Generation"]
+        DG1[archetypes.py<br/>12 behavioral segments]
+        DG2[patients.py<br/>archetype-driven profiles]
+        DG3[state_features.py<br/>clinical snapshots]
+        DG4[historical_activity.py<br/>200k outreach records]
+        DG5[gap_closure.py<br/>longitudinal timelines]
+        DG6[action_eligibility.py<br/>constraint masks]
+    end
+
+    subgraph MODELS["models/ — Learned World Models"]
+        M1[dynamics_model.py<br/>s' = f&#40;s, a&#41; + ε]
+        M2[reward_model.py<br/>P&#40;closure | s, a, days&#41;]
+    end
+
+    subgraph TRAINING["training/ — RL Pipeline"]
+        T1[data_loader.py<br/>JSON → episodes]
+        T2[behavior_cloning.py<br/>BC warm-start]
+        T3[cql_trainer.py<br/>Actor-Critic CQL]
+        T4[evaluation.py<br/>champion vs challenger]
+    end
+
+    subgraph ENV["environment/ — Gym Interface"]
+        E1[hedis_env.py<br/>Model-based evaluation]
+        E2[action_masking.py<br/>business rules]
+        E3[state_space.py<br/>96-dim vectors]
+        E4[reward.py<br/>gap closure + cost]
+    end
+
+    subgraph SIM["simulation/ — 90-Day Loop"]
+        S1[loop.py<br/>orchestrator]
+        S2[world.py<br/>WorldSimulator]
+        S3[daily_cycle.py<br/>agent ↔ world]
+        S4[nightly_cycle.py<br/>Dyna-style update]
+        S5[action_state_machine.py<br/>lifecycle tracking]
+        S6[lagged_rewards.py<br/>delayed closures]
+    end
+
+    subgraph DATA["data/ — JSON Store"]
+        D1[generated/<br/>patients, history, gaps, eligibility]
+        D2[simulation/<br/>daily outputs, metrics, predictions]
+        D3[checkpoints/<br/>champion.pt, dynamics.pt, reward.pt]
+    end
+
+    subgraph DASH["dashboard/ — Plotly Dash :8050"]
+        DA1[STARS Overview]
+        DA2[Live Behavior]
+        DA3[Training & Simulation]
+        DA4[Measures]
+        DA5[Patient Journey]
+        DA6[Logs]
+    end
+
+    CONFIG --> DATAGEN
+    CONFIG --> ENV
+    CONFIG --> TRAINING
+    CONFIG --> SIM
+
+    DATAGEN -->|generates| D1
+    D1 -->|loaded by| TRAINING
+    D1 -->|loaded by| SIM
+    TRAINING -->|produces| D3
+    SIM -->|writes daily| D2
+    S4 -->|updates| D3
+    M1 --> E1
+    M2 --> E1
+    E1 -->|evaluates| T4
+    S2 -->|ground truth| S3
+    D2 -->|5s polling| DASH
+    D3 -->|Q-values| DASH
+```
+
+### Data Flow
+
+```mermaid
+sequenceDiagram
+    participant DG as datagen/
+    participant DS as data/generated/
+    participant TR as training/
+    participant CK as checkpoints/
+    participant WS as WorldSimulator
+    participant DC as daily_cycle
+    participant NC as nightly_cycle
+    participant HE as HEDISEnv (learned)
+    participant DD as data/simulation/
+    participant DB as Dashboard
+
+    DG->>DS: Generate 4 JSON datasets
+    DS->>TR: Load historical data
+    TR->>CK: Train BC → CQL → save champion.pt
+    DS->>TR: Train dynamics + reward models
+    TR->>CK: Save dynamics_model.pt, reward_model.pt
+
+    loop Each Simulated Day
+        DC->>WS: get_patient_context() for each patient
+        DC->>DC: Agent selects action
+        DC->>WS: execute_action() → outcome
+        DC->>WS: advance_day() → lagged rewards, state machine
+        DC->>DD: Write actions, experiences, state machine
+
+        NC->>DD: Load today's + recent experiences
+        NC->>CK: Online update dynamics + reward models
+        NC->>CK: Clone champion → train challenger CQL
+        NC->>HE: Evaluate both on learned world
+        NC->>CK: Promote if challenger wins
+        NC->>DD: Write nightly metrics + sim predictions
+    end
+
+    DD-->>DB: Poll every 5 seconds
+    CK-->>DB: Load for Q-value leaderboard
 ```

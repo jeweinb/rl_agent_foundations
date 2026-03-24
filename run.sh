@@ -275,6 +275,25 @@ cmd_restart() {
     cmd_start
 }
 
+cmd_hot() {
+    header "Hot-Restarting Dashboard"
+    info "Simulation keeps running, only dashboard restarts..."
+    kill_process "$DASHBOARD_PID" "Dashboard"
+    if check_port; then
+        warn "Port $DASHBOARD_PORT still in use, waiting..."
+        sleep 2
+    fi
+    info "Launching fresh dashboard..."
+    python3 scripts/run_dashboard.py --port "$DASHBOARD_PORT" \
+        > "$DASHBOARD_LOG" 2>&1 &
+    echo $! > "$DASHBOARD_PID"
+    if wait_for_port; then
+        ok "Dashboard hot-restarted → \e]8;;http://localhost:$DASHBOARD_PORT\e\\http://localhost:$DASHBOARD_PORT\e]8;;\e\\"
+    else
+        warn "Dashboard may still be starting — check $DASHBOARD_LOG"
+    fi
+}
+
 cmd_clean() {
     header "Cleaning Everything"
     cmd_stop
@@ -299,6 +318,7 @@ case "${1:-start}" in
     start)     cmd_start ;;
     stop)      cmd_stop ;;
     restart)   cmd_restart ;;
+    hot)       cmd_hot ;;
     status)    cmd_status ;;
     dashboard) cmd_dashboard ;;
     simulate)  cmd_simulate ;;
@@ -306,7 +326,7 @@ case "${1:-start}" in
     clean)     cmd_clean ;;
     logs)      cmd_logs ;;
     *)
-        echo "Usage: ./run.sh {start|stop|restart|status|dashboard|simulate|generate|clean|logs}"
+        echo "Usage: ./run.sh {start|stop|restart|hot|status|dashboard|simulate|generate|clean|logs}"
         exit 1
         ;;
 esac

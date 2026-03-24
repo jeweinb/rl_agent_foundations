@@ -106,6 +106,18 @@ def get_all_patient_ids() -> List[str]:
     return sorted(set(a.get("patient_id", "") for a in all_actions if a.get("patient_id")))
 
 
+def load_sim_predictions() -> List[Dict[str, Any]]:
+    """Load simulation predictions from the learned world (nightly eval rollouts)."""
+    path = os.path.join(SIMULATION_DATA_DIR, "sim_predictions.json")
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
 def load_simulation_logs(max_lines: int = 200) -> List[Dict[str, Any]]:
     """Load simulation log entries."""
     path = os.path.join(SIMULATION_DATA_DIR, "simulation_log.jsonl")

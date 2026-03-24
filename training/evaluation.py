@@ -1,12 +1,14 @@
 """
 Champion vs challenger model evaluation.
 Runs both models on the same simulated episodes and compares performance.
+Captures detailed simulation rollout data for dashboard visualization.
 """
 import numpy as np
 from typing import Dict, Any, List, Tuple
+from collections import Counter, defaultdict
 from scipy import stats
 
-from config import NUM_ACTIONS
+from config import NUM_ACTIONS, ACTION_BY_ID, HEDIS_MEASURES, MEASURE_DESCRIPTIONS
 from environment.hedis_env import HEDISEnv
 
 
@@ -115,4 +117,97 @@ def compare_models(
         "promote_challenger": promote,
         "champion_gaps_closed": champion_metrics["mean_gaps_closed"],
         "challenger_gaps_closed": challenger_metrics["mean_gaps_closed"],
+    }
+
+
+def evaluate_agent_detailed(
+    agent,
+    env: HEDISEnv,
+    n_episodes: int = 200,
+    seed: int = 42,
+) -> Dict[str, Any]:
+    """Detailed evaluation capturing action distributions, per-measure closures,
+    and channel breakdown for dashboard visualization.
+
+    This represents "what the learned world predicts will happen tomorrow."
+    """
+    episode_rewards = []
+    all_actions_taken = []
+    measure_closures = Counter()
+    measure_attempts = Counter()
+    channel_actions = Counter()
+    channel_closures = Counter()
+    no_action_count = 0
+    total_actions = 0
+
+    for ep_idx in range(n_episodes):
+        obs, info = env.reset(seed=seed + ep_idx,
+                             options={"patient_idx": ep_idx % len(env.patient_snapshots)})
+        total_reward = 0.0
+
+        done = False
+        while not done:
+            state = obs["observations"]
+            mask = obs["action_mask"]
+
+            if hasattr(agent, "get_action_greedy"):
+                action = agent.get_action_greedy(state, mask)
+            else:
+                valid = np.where(mask)[0]
+                action = int(np.random.choice(valid)) if len(valid) > 0 else 0
+
+            obs, reward, terminated, truncated, info = env.step(action)
+            total_reward += reward
+            total_actions += 1
+
+            if action == 0:
+                no_action_count += 1
+            else:
+                act = ACTION_BY_ID.get(action)
+                if act:
+                    measure_attempts[act.measure] += 1
+                    channel_actions[act.channel] += 1
+                    if info.get("gap_closed"):
+                        measure_closures[act.measure] += 1
+                        channel_closures[act.channel] += 1
+                    all_actions_taken.append({
+                        "measure": act.measure,
+                        "channel": act.channel,
+                        "variant": act.variant,
+                        "gap_closed": info.get("gap_closed", False),
+                    })
+
+            done = terminated or truncated
+
+        episode_rewards.append(total_reward)
+
+    # Build per-measure closure rates (simulated)
+    sim_closure_rates = {}
+    for m in HEDIS_MEASURES:
+        attempts = measure_attempts.get(m, 0)
+        closures = measure_closures.get(m, 0)
+        sim_closure_rates[m] = closures / max(attempts, 1) if attempts > 0 else 0.0
+
+    # Build per-channel effectiveness
+    sim_channel_rates = {}
+    for ch in ["sms", "email", "portal", "app", "ivr"]:
+        ch_acts = channel_actions.get(ch, 0)
+        ch_close = channel_closures.get(ch, 0)
+        sim_channel_rates[ch] = ch_close / max(ch_acts, 1) if ch_acts > 0 else 0.0
+
+    # Action distribution by measure
+    action_dist_by_measure = dict(measure_attempts)
+    action_dist_by_channel = dict(channel_actions)
+
+    return {
+        "mean_reward": float(np.mean(episode_rewards)),
+        "std_reward": float(np.std(episode_rewards)),
+        "total_actions": total_actions,
+        "no_action_count": no_action_count,
+        "no_action_rate": no_action_count / max(total_actions, 1),
+        "sim_closure_rates": sim_closure_rates,
+        "sim_channel_rates": sim_channel_rates,
+        "action_dist_by_measure": action_dist_by_measure,
+        "action_dist_by_channel": action_dist_by_channel,
+        "n_episodes": n_episodes,
     }

@@ -5,7 +5,7 @@ Plotly Dash application entry point.
 from dash import Dash, html, dcc
 
 from config import DASHBOARD_UPDATE_INTERVAL_MS
-from dashboard.layouts import overview, realtime, training, measures, patient_journey, state_machine, logs
+from dashboard.layouts import overview, realtime, training, measures, patient_journey, logs
 from dashboard.callbacks import register_callbacks
 
 
@@ -99,7 +99,7 @@ def create_app() -> Dash:
     """Create and configure the Dash application."""
     app = Dash(
         __name__,
-        title="HEDIS STARS RL Agent Dashboard",
+        title="NBA Stars Model — CQL Offline RL Agent",
         suppress_callback_exceptions=True,
     )
 
@@ -140,11 +140,11 @@ def create_app() -> Dash:
         # Header
         html.Div([
             html.Div([
-                html.H1("HEDIS STARS Gap Closure", style={
+                html.H1("NBA Stars Model", style={
                     "margin": "0", "fontSize": "22px", "fontWeight": "700",
                     "color": "#1B2A4A",
                 }),
-                html.P("Medicare Advantage CQL Offline RL Agent | Real-Time Monitoring", style={
+                html.P("CQL Offline RL Agent | Monitoring Dashboard", style={
                     "margin": "2px 0 0", "fontSize": "13px", "color": "#64748b",
                 }),
             ], style={"display": "inline-block"}),
@@ -166,10 +166,10 @@ def create_app() -> Dash:
             dcc.Tab(label="STARS Overview", value="tab-overview",
                    children=html.Div(overview.create_layout(), className="tab-content"),
                    style=tab_style, selected_style=tab_selected_style),
-            dcc.Tab(label="Real-Time Actions", value="tab-realtime",
+            dcc.Tab(label="Live Behavior", value="tab-realtime",
                    children=html.Div(realtime.create_layout(), className="tab-content"),
                    style=tab_style, selected_style=tab_selected_style),
-            dcc.Tab(label="Training", value="tab-training",
+            dcc.Tab(label="Training & Simulation", value="tab-training",
                    children=html.Div(training.create_layout(), className="tab-content"),
                    style=tab_style, selected_style=tab_selected_style),
             dcc.Tab(label="Measures", value="tab-measures",
@@ -177,9 +177,6 @@ def create_app() -> Dash:
                    style=tab_style, selected_style=tab_selected_style),
             dcc.Tab(label="Patient Journey", value="tab-patient",
                    children=html.Div(patient_journey.create_layout(), className="tab-content"),
-                   style=tab_style, selected_style=tab_selected_style),
-            dcc.Tab(label="Action Lifecycle", value="tab-statemachine",
-                   children=html.Div(state_machine.create_layout(), className="tab-content"),
                    style=tab_style, selected_style=tab_selected_style),
             dcc.Tab(label="Logs", value="tab-logs",
                    children=html.Div(logs.create_layout(), className="tab-content"),
