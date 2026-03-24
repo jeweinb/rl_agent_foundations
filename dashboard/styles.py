@@ -14,6 +14,8 @@ CARD_STYLE = {
     "boxShadow": "0 1px 3px rgba(0,0,0,0.08)",
     "border": f"1px solid {GRAY_BORDER}",
     "flex": "1",
+    "minWidth": "0",
+    "boxSizing": "border-box",
 }
 
 
@@ -24,9 +26,10 @@ def card(children, **kwargs):
 
 
 def row(children, gap="16px", **kwargs):
-    """Flexbox row with consistent gap and margin."""
+    """Flexbox row with consistent gap and margin. Wraps on small screens."""
     style = {
         "display": "flex",
+        "flexWrap": "wrap",
         "gap": gap,
         "marginBottom": "16px",
         **kwargs.pop("style", {}),

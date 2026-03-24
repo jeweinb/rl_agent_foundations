@@ -16,12 +16,12 @@ from collections import defaultdict
 from config import (
     HEDIS_MEASURES, NUM_ACTIONS, ACTION_BY_ID,
     MAX_CONTACTS_PER_WEEK, MIN_DAYS_BETWEEN_SAME_MEASURE,
-    CLOSURE_CLICKED_FACTOR, CLOSURE_OPENED_FACTOR, CLOSURE_DELIVERED_FACTOR,
-    CLOSURE_PROB_CAP, MEASURE_WEIGHTS,
+    CLOSURE_BASE_MULTIPLIER, CLOSURE_CLICKED_FACTOR, CLOSURE_OPENED_FACTOR,
+    CLOSURE_DELIVERED_FACTOR, CLOSURE_PROB_CAP, MEASURE_WEIGHTS,
+    GAP_CLOSURE_BASE_RATES,
     compute_global_budget, get_measure_category,
     AVG_MESSAGES_PER_PATIENT, BUDGET_WARNING_THRESHOLD, BUDGET_CRITICAL_THRESHOLD,
 )
-from config import GAP_CLOSURE_BASE_RATES
 from environment.state_space import snapshot_to_vector
 from environment.action_masking import compute_action_mask
 from environment.reward import compute_reward

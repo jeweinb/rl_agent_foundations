@@ -24,6 +24,24 @@ body {
     padding: 24px 32px;
     width: 100%;
     box-sizing: border-box;
+    overflow-x: hidden;
+}
+
+/* Fix flex items not shrinking on zoom-out */
+.tab-content > div {
+    min-width: 0;
+}
+
+/* Ensure flex rows wrap at small widths */
+.tab-content div[style*="display: flex"] {
+    flex-wrap: wrap !important;
+    min-width: 0;
+}
+
+/* Cards should have min-width to prevent collapse but allow shrink */
+.tab-content div[style*="border-radius: 12px"] {
+    min-width: 200px;
+    box-sizing: border-box;
 }
 
 table {
