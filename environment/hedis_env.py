@@ -71,10 +71,11 @@ class HEDISEnv(gym.Env):
         self._open_gaps: set = set()
         self._episode_reward = 0.0
         self._day_of_year = 15
-        # Message budget
-        from config import MESSAGE_BUDGET_PER_QUARTER
-        self._budget_max = MESSAGE_BUDGET_PER_QUARTER
-        self._budget_remaining = MESSAGE_BUDGET_PER_QUARTER
+        # Global message budget (simulated for eval episodes)
+        from config import compute_global_budget
+        cohort = len(self.patient_snapshots)
+        self._budget_max = compute_global_budget(cohort)
+        self._budget_remaining = self._budget_max
 
     def reset(
         self,

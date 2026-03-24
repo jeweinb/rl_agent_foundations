@@ -31,7 +31,7 @@ def compute_action_mask(
         suppressed: Whether patient is under general suppression.
         opt_out: Whether patient has opted out of all communications.
         grievance_hold: Whether patient has an active grievance hold.
-        budget_remaining: Messages remaining in the patient's budget. 0 = fully exhausted.
+        budget_remaining: Global message budget remaining. 0 = fully exhausted, no more messages for anyone.
 
     Returns:
         Boolean numpy array of shape (NUM_ACTIONS,). True = action is valid.
@@ -43,7 +43,7 @@ def compute_action_mask(
     if opt_out or grievance_hold or suppressed:
         return mask
 
-    # Budget exhausted — patient is suppressed until replenishment
+    # Global budget exhausted — no more messages for anyone
     if budget_remaining is not None and budget_remaining <= 0:
         return mask
 

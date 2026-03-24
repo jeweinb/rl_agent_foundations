@@ -42,13 +42,26 @@ def generate_historical_activity(
     end_date = datetime.strptime(HISTORICAL_DATE_RANGE[1], "%Y-%m-%d")
     date_range_days = (end_date - start_date).days
 
-    # Build patient lookup
+    # Build patient lookup with archetype info
     patient_gaps = {}
     patient_engagement = {}
+    patient_archetype = {}
     for snap in state_snapshots:
         pid = snap["patient_id"]
         patient_gaps[pid] = snap["open_gaps"] + snap["closed_gaps"]
         patient_engagement[pid] = snap.get("engagement", {})
+
+    for p in patients:
+        pid = p["patient_id"]
+        patient_archetype[pid] = {
+            "channel_affinity": p.get("channel_affinity", {}),
+            "channel_engagement": p.get("channel_engagement", {}),
+            "overall_responsiveness": p.get("overall_responsiveness", 0.5),
+            "timing_optimal_days": p.get("timing_optimal_days", 14),
+            "timing_decay": p.get("timing_decay", 0.3),
+            "gap_closure_boost": p.get("gap_closure_boost", {}),
+            "variant_boost": p.get("variant_boost", {}),
+        }
 
     patient_ids = [p["patient_id"] for p in patients]
     channels = list(BEHAVIORAL_CHANNEL_PROBS.keys())
@@ -108,58 +121,53 @@ def generate_historical_activity(
             else:
                 continue
 
-        # --- PATTERN 2: Engagement based on patient profile ---
-        # Patients with higher response rates engage more
-        patient_response = eng.get(f"{channel}_response_rate",
-                                   eng.get("sms_response_rate", 0.3))
-        if channel == "email":
-            patient_response = eng.get("email_open_rate", 0.2)
-        elif channel == "app":
-            patient_response = eng.get("app_engagement_rate", 0.4)
+        # --- PATTERN 2: Engagement based on ARCHETYPE channel affinity ---
+        arch = patient_archetype.get(pid, {})
+        ch_affinity = arch.get("channel_affinity", {}).get(channel, 0.3)
+        ch_engagement = arch.get("channel_engagement", {}).get(channel, 0.15)
+        responsiveness = arch.get("overall_responsiveness", 0.5)
 
         delivered = bool(rng.random() < DELIVERY_RATES.get(channel, 0.9))
-        # Open rate is boosted by patient engagement level
-        base_open = OPEN_RATES.get(channel, 0.3)
-        open_prob = base_open * (0.5 + patient_response)  # Engaged patients open more
+        # Open rate driven by archetype's affinity for this channel
+        open_prob = ch_affinity * responsiveness
         opened = bool(delivered and rng.random() < min(open_prob, 0.95))
 
-        base_click = CLICK_RATES.get(channel, 0.1)
-        click_prob = base_click * (0.5 + patient_response * 1.5)
-        clicked = bool(opened and rng.random() < min(click_prob, 0.60))
+        # Click rate driven by archetype's engagement for this channel
+        click_prob = ch_engagement * responsiveness
+        # Variant boost for archetypes that respond to specific content
+        variant_boost = arch.get("variant_boost", {}).get(action.variant, 1.0)
+        click_prob *= variant_boost
+        clicked = bool(opened and rng.random() < min(click_prob, 0.70))
 
-        # --- PATTERN 3: Timing affects outcomes ---
+        # --- PATTERN 3: Timing affects outcomes (archetype-specific) ---
         days_since_last = patient_last_contact.get(pid, 30)
         measure_contacts = patient_measure_contacts.get(pid, {}).get(measure, 0)
 
-        # Well-spaced contacts (7+ days) work better
-        timing_factor = 1.0
-        if days_since_last < 3:
-            timing_factor = 0.3  # Too frequent — patient ignores
-        elif days_since_last < 7:
-            timing_factor = 0.7
-        elif days_since_last > 14:
-            timing_factor = 1.2  # Patient had time to act
+        # Archetype-specific timing: each archetype has an optimal contact interval
+        optimal_days = arch.get("timing_optimal_days", 14)
+        timing_decay = arch.get("timing_decay", 0.3)
+        if days_since_last < optimal_days * 0.3:
+            timing_factor = 1.0 - timing_decay  # Too frequent for this archetype
+        elif days_since_last < optimal_days:
+            timing_factor = 0.8 + 0.2 * (days_since_last / optimal_days)
+        else:
+            timing_factor = 1.2  # Had enough space
 
-        # Diminishing returns on same measure
         repetition_factor = max(0.3, 1.0 - measure_contacts * 0.15)
 
-        # --- PATTERN 4: Channel-measure match drives closure ---
-        best_ch = BEST_CHANNEL_BY_CATEGORY.get(category, "sms")
-        channel_match_factor = 1.0
-        if channel == best_ch:
-            channel_match_factor = 1.8  # Best channel → much higher closure
-        elif channel == SECOND_BEST_CHANNEL.get(category, "email"):
-            channel_match_factor = 1.3  # Second best → moderate boost
+        # --- PATTERN 4: Archetype gap closure boost by measure category ---
+        gap_boost = arch.get("gap_closure_boost", {}).get(category, 1.0)
 
         # --- Compute closure probability ---
         base_rate = GAP_CLOSURE_BASE_RATES.get(measure, 0.5)
-        closure_prob_30d = (base_rate * 0.25 *
-                           channel_match_factor *
+        closure_prob_30d = (base_rate * 0.20 *
+                           gap_boost *          # Archetype's responsiveness to this measure category
+                           ch_affinity *         # How well this channel fits the patient
                            timing_factor *
                            repetition_factor)
 
         if clicked:
-            closure_prob_30d *= 3.0  # Strong signal: click → closure
+            closure_prob_30d *= 3.0
         elif opened:
             closure_prob_30d *= 1.5
 

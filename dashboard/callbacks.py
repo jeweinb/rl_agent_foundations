@@ -317,31 +317,32 @@ def register_callbacks(app):
         metrics = load_cumulative_metrics()
         if metrics:
             latest = metrics[-1]
-            # Budget info comes from daily cycle results
-            avg_budget = latest.get("avg_budget_remaining")
-            exhausted = latest.get("budget_exhausted_count", 0)
-            from config import MESSAGE_BUDGET_PER_QUARTER, COHORT_SIZE
-            if avg_budget is not None:
-                avg_pct = avg_budget / max(MESSAGE_BUDGET_PER_QUARTER, 1) * 100
-                bar_color = HUMANA_GREEN if avg_pct > 50 else ("#f59e0b" if avg_pct > 25 else "#ef4444")
+            budget_remaining = latest.get("avg_budget_remaining")  # Now stores global remaining
+            from config import compute_global_budget, COHORT_SIZE
+            budget_total = compute_global_budget(COHORT_SIZE)
+            if budget_remaining is not None:
+                budget_used = budget_total - budget_remaining
+                budget_pct = max(0, budget_remaining / max(budget_total, 1) * 100)
+                used_pct = 100 - budget_pct
+                bar_color = HUMANA_GREEN if budget_pct > 50 else ("#f59e0b" if budget_pct > 25 else "#ef4444")
                 budget_gauge = html.Div([
                     html.Div([
                         html.Div([
-                            html.Span(f"{avg_budget:.1f}", style={"fontSize": "28px", "fontWeight": "700", "color": NAVY}),
-                            html.Span(f" / {MESSAGE_BUDGET_PER_QUARTER} avg remaining", style={"fontSize": "14px", "color": GRAY_TEXT}),
+                            html.Span(f"{budget_remaining:,.0f}", style={"fontSize": "28px", "fontWeight": "700", "color": NAVY}),
+                            html.Span(f" / {budget_total:,} messages remaining", style={"fontSize": "14px", "color": GRAY_TEXT}),
                         ]),
                         html.Div([
-                            html.Span(f"{exhausted:,}", style={"fontSize": "28px", "fontWeight": "700", "color": "#ef4444"}),
-                            html.Span(f" patients exhausted", style={"fontSize": "14px", "color": GRAY_TEXT}),
+                            html.Span(f"{budget_used:,.0f}", style={"fontSize": "28px", "fontWeight": "700", "color": "#64748b"}),
+                            html.Span(f" used ({used_pct:.0f}%)", style={"fontSize": "14px", "color": GRAY_TEXT}),
                         ]),
                     ], style={"display": "flex", "gap": "60px", "marginBottom": "10px"}),
                     html.Div([
                         html.Div(style={
-                            "width": f"{100-avg_pct:.0f}%", "height": "14px",
+                            "width": f"{used_pct:.0f}%", "height": "14px",
                             "backgroundColor": "#94a3b8",
                         }),
                         html.Div(style={
-                            "width": f"{avg_pct:.0f}%", "height": "14px",
+                            "width": f"{budget_pct:.0f}%", "height": "14px",
                             "backgroundColor": bar_color,
                         }),
                     ], style={"display": "flex", "borderRadius": "7px", "overflow": "hidden",
@@ -732,59 +733,57 @@ def register_callbacks(app):
             ], style={"fontSize": "14px"}),
         ])
 
-        # --- Budget Bar ---
+        # --- Patient Message Count + Global Budget Context ---
         latest = journey[-1] if journey else {}
-        budget_rem = latest.get("budget_remaining", 12)
-        budget_max = latest.get("budget_max", 12)
+        patient_msgs = latest.get("patient_messages", sum(1 for a in journey if a.get("action_id", 0) != 0))
+        budget_rem = latest.get("budget_remaining", 60000)
+        budget_max = latest.get("budget_max", 60000)
+        from config import AVG_MESSAGES_PER_PATIENT
         budget_used = budget_max - budget_rem
-        budget_pct = max(0, (budget_rem / max(budget_max, 1)) * 100)
-        used_pct = 100 - budget_pct
-
-        if budget_rem == 0:
-            budget_color = "#ef4444"
-            status_text = "EXHAUSTED"
-            status_color = "#ef4444"
-        elif budget_pct < 25:
-            budget_color = "#f59e0b"
-            status_text = "LOW"
-            status_color = "#f59e0b"
-        else:
-            budget_color = HUMANA_GREEN
-            status_text = "OK"
-            status_color = HUMANA_GREEN
+        # Patient contact intensity vs cohort average
+        above_avg = patient_msgs > AVG_MESSAGES_PER_PATIENT
+        intensity_color = "#f59e0b" if above_avg else HUMANA_GREEN
+        intensity_label = "Above Average" if above_avg else "Below Average"
+        # Visual: bar showing this patient's messages vs the avg
+        msg_pct = min(patient_msgs / max(AVG_MESSAGES_PER_PATIENT * 2, 1) * 100, 100)
+        avg_marker_pct = min(AVG_MESSAGES_PER_PATIENT / max(AVG_MESSAGES_PER_PATIENT * 2, 1) * 100, 100)
 
         budget_bar = html.Div([
             html.Div([
-                html.Span("Message Budget: ", style={"fontWeight": "bold", "fontSize": "14px"}),
-                html.Span(f"{budget_rem} of {budget_max} remaining ", style={"fontSize": "14px"}),
-                html.Span(f"({budget_used} used — includes prior outreach)", style={"fontSize": "12px", "color": GRAY_TEXT, "marginLeft": "4px"}),
-                html.Span(f"  {status_text}", style={
-                    "fontSize": "11px", "fontWeight": "700", "color": status_color,
+                html.Span(f"This patient: ", style={"fontWeight": "500", "fontSize": "14px"}),
+                html.Span(f"{patient_msgs} messages received", style={"fontSize": "14px", "fontWeight": "700", "color": NAVY}),
+                html.Span(f"  (avg: {AVG_MESSAGES_PER_PATIENT})", style={"fontSize": "12px", "color": GRAY_TEXT, "marginLeft": "8px"}),
+                html.Span(f"  {intensity_label}", style={
+                    "fontSize": "11px", "fontWeight": "700", "color": intensity_color,
                     "marginLeft": "12px", "padding": "2px 8px",
-                    "backgroundColor": f"{status_color}18", "borderRadius": "4px",
+                    "backgroundColor": f"{intensity_color}18", "borderRadius": "4px",
                 }),
             ], style={"marginBottom": "6px"}),
             html.Div([
-                # Used portion (dark)
                 html.Div(style={
-                    "width": f"{used_pct}%", "height": "12px",
-                    "backgroundColor": "#dc2626" if budget_rem == 0 else "#94a3b8",
-                    "display": "inline-block",
+                    "width": f"{msg_pct}%", "height": "12px",
+                    "backgroundColor": intensity_color, "borderRadius": "6px 0 0 6px",
                 }),
-                # Remaining portion (green)
                 html.Div(style={
-                    "width": f"{budget_pct}%", "height": "12px",
-                    "backgroundColor": budget_color,
-                    "display": "inline-block",
+                    "width": f"{100-msg_pct}%", "height": "12px",
                 }),
             ], style={
-                "width": "100%", "backgroundColor": "#f1f5f9",
+                "width": "100%", "backgroundColor": "#f1f5f9", "position": "relative",
                 "borderRadius": "6px", "overflow": "hidden",
-                "border": "1px solid #e2e8f0", "display": "flex",
+                "border": f"1px solid {GRAY_BORDER}", "display": "flex",
             }),
+            # Average marker line
+            html.Div(
+                html.Span("avg", style={"fontSize": "9px", "color": GRAY_TEXT}),
+                style={
+                    "position": "relative", "left": f"{avg_marker_pct}%",
+                    "top": "-14px", "height": "0", "width": "0",
+                    "borderLeft": "1px dashed #64748b",
+                },
+            ),
         ], style={
             "background": "white", "padding": "12px 16px", "borderRadius": "8px",
-            "border": f"1px solid {status_color}40",
+            "border": f"1px solid {GRAY_BORDER}",
         })
 
         # --- Action Cards ---

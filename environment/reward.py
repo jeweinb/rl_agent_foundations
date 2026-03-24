@@ -8,7 +8,7 @@ from typing import Optional
 from config import (
     REWARD_WEIGHTS, MEASURE_WEIGHTS,
     BUDGET_WARNING_THRESHOLD, BUDGET_CRITICAL_THRESHOLD,
-    MESSAGE_BUDGET_PER_QUARTER,
+    AVG_MESSAGES_PER_PATIENT,
 )
 
 
@@ -50,7 +50,7 @@ def compute_reward(
         Scalar reward value.
     """
     if budget_max is None:
-        budget_max = MESSAGE_BUDGET_PER_QUARTER
+        budget_max = AVG_MESSAGES_PER_PATIENT * 5000
     if budget_remaining is None:
         budget_remaining = budget_max
 

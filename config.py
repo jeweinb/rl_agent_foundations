@@ -285,7 +285,7 @@ FEAT_IDX_GAP_FLAGS_START = 24   # 6+6+8+4
 FEAT_IDX_ENGAGEMENT_START = 42  # 24+18
 FEAT_IDX_RISK_START = 53        # 42+11
 FEAT_IDX_BUDGET_START = 57      # 53+4
-FEAT_IDX_TEMPORAL_START = 61    # 57+4
+FEAT_IDX_TEMPORAL_START = 67    # 57+10 (global budget 4 + patient context 6)
 
 # Normalization constants
 CONTACT_NORMALIZATION_MAX = 20
@@ -303,16 +303,20 @@ CLOSURE_DELIVERED_FACTOR = 1.1        # Multiplied if delivered
 CLOSURE_PROB_CAP = 0.5                # Maximum per-interaction closure probability
 
 # ---------------------------------------------------------------------------
-# Message Budget — global per-patient outreach budget
+# Message Budget — GLOBAL shared pool across all patients
 # ---------------------------------------------------------------------------
-# Each patient has a finite message budget per quarter. Once exhausted, the
-# patient is suppressed until the next quarter. This forces the agent to learn
-# WHEN to stay silent and conserve budget for high-impact moments.
-MESSAGE_BUDGET_PER_QUARTER = 12       # Max messages per 90-day quarter
-MESSAGE_BUDGET_PER_YEAR = 45          # Hard annual cap
-BUDGET_WARNING_THRESHOLD = 0.25       # Warn when <25% budget remaining
+# The organization has a total message budget = AVG_MESSAGES_PER_PATIENT × cohort_size.
+# The agent decides how to ALLOCATE this pool — some patients may get 20+ messages
+# (high-value, responsive), others get 2 (unresponsive, already closed).
+# This creates a resource allocation problem: don't waste messages on patients
+# who won't respond; concentrate on high-value targets.
+AVG_MESSAGES_PER_PATIENT = 12         # Average messages per patient per quarter
+BUDGET_WARNING_THRESHOLD = 0.25       # Warn when <25% of global budget remaining
 BUDGET_CRITICAL_THRESHOLD = 0.10      # Heavy penalty when <10% remaining
-BUDGET_REPLENISH_INTERVAL_DAYS = 90   # Quarterly replenishment
+
+def compute_global_budget(cohort_size: int) -> int:
+    """Total message budget for the quarter = avg × cohort."""
+    return AVG_MESSAGES_PER_PATIENT * cohort_size
 
 # ---------------------------------------------------------------------------
 # Reward Weights

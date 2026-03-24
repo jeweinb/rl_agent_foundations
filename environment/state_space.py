@@ -36,12 +36,18 @@ def _build_feature_names():
     ])
     # Risk scores (4)
     names.extend(["readmission_risk", "disenrollment_risk", "non_compliance_risk", "composite_acuity_norm"])
-    # Message budget (4)
+    # Global budget + patient contact context (10)
     names.extend([
-        "budget_remaining_norm",       # Remaining messages / max budget (0=exhausted, 1=full)
-        "budget_utilization_rate",     # Messages sent / total budget so far
-        "budget_is_warning",           # 1.0 if budget < 25%
-        "budget_is_critical",          # 1.0 if budget < 10%
+        "global_budget_remaining_norm",     # Global pool remaining / total (0=exhausted, 1=full)
+        "global_budget_utilization",        # Fraction of global budget used so far
+        "global_budget_is_warning",         # 1.0 if global budget < 25%
+        "global_budget_is_critical",        # 1.0 if global budget < 10%
+        "patient_messages_received_norm",   # Messages THIS patient received / avg per patient
+        "patient_messages_vs_avg",          # This patient's messages / cohort avg (>1 = above avg)
+        "patient_historical_response_rate", # Has patient ever clicked/accepted? (0-1)
+        "patient_avg_gap_age_norm",         # Avg days gaps have been open / 365 (urgency signal)
+        "patient_days_since_last_closure",  # Days since this patient last closed any gap / 90
+        "patient_channel_diversity",        # How many distinct channels used / 5 (saturation signal)
     ])
     # Temporal (3)
     names.extend(["day_of_year_sin", "day_of_year_cos", "days_remaining_norm"])
@@ -71,6 +77,12 @@ def snapshot_to_vector(
     day_of_year: int = 15,
     budget_remaining: int = None,
     budget_max: int = None,
+    patient_messages_received: int = 0,
+    cohort_avg_messages: float = 0.0,
+    patient_response_rate: float = 0.0,
+    patient_avg_gap_age: float = 0.0,
+    patient_days_since_closure: float = 90.0,
+    patient_channels_used: int = 0,
 ) -> np.ndarray:
     """Convert a patient state snapshot dict to a fixed-size feature vector.
 
@@ -79,8 +91,14 @@ def snapshot_to_vector(
         action_history: List of recent action IDs (most recent first), up to 5.
         gap_attempt_info: Dict mapping measure -> {"days_since": int, "count": int}.
         day_of_year: Current day of the measurement year (1-365).
-        budget_remaining: Messages remaining in current budget period.
-        budget_max: Max budget for the period.
+        budget_remaining: Global budget remaining.
+        budget_max: Total global budget.
+        patient_messages_received: Messages this patient has received so far.
+        cohort_avg_messages: Average messages per patient across cohort.
+        patient_response_rate: Historical click/accept rate for this patient (0-1).
+        patient_avg_gap_age: Average days this patient's gaps have been open.
+        patient_days_since_closure: Days since this patient last closed any gap.
+        patient_channels_used: Number of distinct channels used for this patient.
 
     Returns:
         numpy array of shape (STATE_DIM,).
@@ -146,17 +164,25 @@ def snapshot_to_vector(
     vec[idx] = risk.get("non_compliance_risk", 0.0); idx += 1
     vec[idx] = risk.get("composite_acuity", 0.0) / 5.0; idx += 1
 
-    # Message budget (4)
-    from config import MESSAGE_BUDGET_PER_QUARTER, BUDGET_WARNING_THRESHOLD, BUDGET_CRITICAL_THRESHOLD
+    # Global budget + patient contact context (10)
+    from config import BUDGET_WARNING_THRESHOLD, BUDGET_CRITICAL_THRESHOLD, AVG_MESSAGES_PER_PATIENT
     if budget_max is None:
-        budget_max = MESSAGE_BUDGET_PER_QUARTER
+        budget_max = AVG_MESSAGES_PER_PATIENT * 5000  # Fallback
     if budget_remaining is None:
         budget_remaining = budget_max
     budget_frac = budget_remaining / max(budget_max, 1)
-    vec[idx] = budget_frac; idx += 1                                          # budget_remaining_norm
-    vec[idx] = 1.0 - budget_frac; idx += 1                                    # budget_utilization_rate
-    vec[idx] = 1.0 if budget_frac < BUDGET_WARNING_THRESHOLD else 0.0; idx += 1   # budget_is_warning
-    vec[idx] = 1.0 if budget_frac < BUDGET_CRITICAL_THRESHOLD else 0.0; idx += 1  # budget_is_critical
+    vec[idx] = budget_frac; idx += 1                                          # global_budget_remaining_norm
+    vec[idx] = 1.0 - budget_frac; idx += 1                                    # global_budget_utilization
+    vec[idx] = 1.0 if budget_frac < BUDGET_WARNING_THRESHOLD else 0.0; idx += 1   # global_budget_is_warning
+    vec[idx] = 1.0 if budget_frac < BUDGET_CRITICAL_THRESHOLD else 0.0; idx += 1  # global_budget_is_critical
+    # Per-patient contact context
+    avg_msg = max(cohort_avg_messages, 1.0)
+    vec[idx] = min(patient_messages_received / max(AVG_MESSAGES_PER_PATIENT, 1), 3.0) / 3.0; idx += 1  # patient_messages_received_norm
+    vec[idx] = min(patient_messages_received / avg_msg, 3.0) / 3.0 if avg_msg > 0 else 0.0; idx += 1  # patient_messages_vs_avg
+    vec[idx] = patient_response_rate; idx += 1                                # patient_historical_response_rate
+    vec[idx] = min(patient_avg_gap_age / 365.0, 1.0); idx += 1               # patient_avg_gap_age_norm
+    vec[idx] = min(patient_days_since_closure / 90.0, 1.0); idx += 1         # patient_days_since_last_closure
+    vec[idx] = patient_channels_used / 5.0; idx += 1                          # patient_channel_diversity
 
     # Temporal (3)
     vec[idx] = np.sin(2 * np.pi * day_of_year / 365); idx += 1

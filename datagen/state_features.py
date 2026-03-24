@@ -113,36 +113,46 @@ def generate_state_features(
         # Open/closed gaps
         open_gaps, closed_gaps = _generate_open_gaps(patient, rng)
 
-        # Engagement
-        sms_consent = bool(rng.random() < SMS_CONSENT_RATE)
-        email_available = bool(rng.random() < EMAIL_AVAILABLE_RATE)
-        portal_registered = bool(rng.random() < PORTAL_REGISTERED_RATE)
-        app_installed = bool(rng.random() < APP_INSTALLED_RATE)
+        # Engagement — driven by patient's archetype channel affinity
+        sms_consent = patient.get("sms_consent", bool(rng.random() < SMS_CONSENT_RATE))
+        email_available = patient.get("email_available", bool(rng.random() < EMAIL_AVAILABLE_RATE))
+        portal_registered = patient.get("portal_registered", bool(rng.random() < PORTAL_REGISTERED_RATE))
+        app_installed = patient.get("app_installed", bool(rng.random() < APP_INSTALLED_RATE))
+
+        # Use archetype channel engagement rates (with noise) instead of population averages
+        ch_eng = patient.get("channel_engagement", {})
+
+        # Preferred channel = highest affinity channel that's available
+        ch_aff = patient.get("channel_affinity", {})
+        avail_channels = []
+        if sms_consent: avail_channels.append(("sms", ch_aff.get("sms", 0.3)))
+        if email_available: avail_channels.append(("email", ch_aff.get("email", 0.2)))
+        if portal_registered: avail_channels.append(("portal", ch_aff.get("portal", 0.1)))
+        if app_installed: avail_channels.append(("app", ch_aff.get("app", 0.1)))
+        avail_channels.append(("ivr", ch_aff.get("ivr", 0.15)))
+        preferred = max(avail_channels, key=lambda x: x[1])[0] if avail_channels else "sms"
 
         engagement = {
             "sms_consent": sms_consent,
             "email_available": email_available,
             "portal_registered": portal_registered,
             "app_installed": app_installed,
-            "preferred_channel": rng.choice(
-                ["sms", "email", "portal", "app", "ivr"],
-                p=[0.35, 0.30, 0.15, 0.12, 0.08]
-            ),
+            "preferred_channel": preferred,
             "total_contacts_90d": int(rng.poisson(4)),
             "sms_response_rate": float(np.clip(
-                rng.normal(CHANNEL_RESPONSE_RATES["sms"]["mean"], CHANNEL_RESPONSE_RATES["sms"]["std"]), 0, 1
+                rng.normal(ch_eng.get("sms", 0.3), 0.1), 0, 1
             )) if sms_consent else 0.0,
             "email_open_rate": float(np.clip(
-                rng.normal(CHANNEL_RESPONSE_RATES["email"]["mean"], CHANNEL_RESPONSE_RATES["email"]["std"]), 0, 1
+                rng.normal(ch_eng.get("email", 0.2), 0.1), 0, 1
             )) if email_available else 0.0,
             "portal_engagement_rate": float(np.clip(
-                rng.normal(CHANNEL_RESPONSE_RATES["portal"]["mean"], CHANNEL_RESPONSE_RATES["portal"]["std"]), 0, 1
+                rng.normal(ch_eng.get("portal", 0.15), 0.1), 0, 1
             )) if portal_registered else 0.0,
             "app_engagement_rate": float(np.clip(
-                rng.normal(CHANNEL_RESPONSE_RATES["app"]["mean"], CHANNEL_RESPONSE_RATES["app"]["std"]), 0, 1
+                rng.normal(ch_eng.get("app", 0.15), 0.1), 0, 1
             )) if app_installed else 0.0,
             "ivr_completion_rate": float(np.clip(
-                rng.normal(CHANNEL_RESPONSE_RATES["ivr"]["mean"], CHANNEL_RESPONSE_RATES["ivr"]["std"]), 0, 1
+                rng.normal(ch_eng.get("ivr", 0.15), 0.1), 0, 1
             )),
             "last_contact_date": snapshot_date,
             "days_since_last_contact": int(rng.integers(1, 60)),

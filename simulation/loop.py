@@ -90,13 +90,17 @@ def run_simulation(
     # =========================================================================
     # WARM START — patients don't all start fresh on day 1
     # =========================================================================
-    # In reality the business has been running outreach for months. Patients
-    # arrive at different stages: some freshly enrolled, some mid-year with
-    # depleted budgets, some with in-flight actions, some with recently
-    # closed gaps from prior outreach.
     log.info("Warm-starting patient cohort with mid-flight states...")
-    from config import MESSAGE_BUDGET_PER_QUARTER
-    patient_budgets = {}
+    from config import compute_global_budget, AVG_MESSAGES_PER_PATIENT
+
+    # Initialize global budget pool
+    total_budget = compute_global_budget(len(patient_snapshots))
+    global_budget = {
+        "remaining": total_budget,
+        "max": total_budget,
+        "total_sent": 0,
+        "patient_stats": {},
+    }
     warm_start_stats = {"fresh": 0, "mid_flight": 0, "heavy_contact": 0, "near_exhausted": 0}
 
     for snap in patient_snapshots:
@@ -174,22 +178,26 @@ def run_simulation(
                         closure_prob=0.9,  # Very likely already closed
                     )
 
-        patient_budgets[pid] = {
-            "remaining": max(0, MESSAGE_BUDGET_PER_QUARTER - budget_used),
-            "max": MESSAGE_BUDGET_PER_QUARTER,
-            "total_sent": budget_used,
-            "quarter_start_day": 1,
+        # Track in global budget
+        global_budget["remaining"] -= budget_used
+        global_budget["total_sent"] += budget_used
+        global_budget["patient_stats"][pid] = {
+            "messages_sent": budget_used,
             "contacts_this_week": 0,
             "week_start_day": 1,
+            "channels_used": set(),
+            "responses": 0,
+            "last_closure_day": 0,
         }
 
-    # Process warm-start lagged rewards that resolve immediately (day 0 schedule, short lag)
+    # Process warm-start lagged rewards
     day0_resolved = lagged_queue.collect(0)
     day0_closures = sum(1 for r in day0_resolved if r["will_close"])
 
+    budget_pct = global_budget["remaining"] / max(global_budget["max"], 1) * 100
     log.info(
         f"Warm start complete: {warm_start_stats} | "
-        f"Avg budget remaining: {np.mean([b['remaining'] for b in patient_budgets.values()]):.1f} | "
+        f"Global budget: {global_budget['remaining']:,}/{global_budget['max']:,} ({budget_pct:.0f}%) | "
         f"Pending lagged rewards: {lagged_queue.get_pending_count()} | "
         f"Day-0 closures: {day0_closures} | "
         f"In-flight actions: {len(state_machine.actions)}"
@@ -222,11 +230,11 @@ def run_simulation(
             state_machine=state_machine,
             lagged_queue=lagged_queue,
             rng=rng,
-            patient_budgets=patient_budgets,
+            global_budget=global_budget,
         )
 
-        # Persist budgets for next day
-        patient_budgets = day_results.get("patient_budgets", patient_budgets)
+        # Persist global budget for next day
+        global_budget = day_results.get("global_budget", global_budget)
 
         gap_closures_total = sum(day_results["gap_closures"].values())
         log.metric(
@@ -243,9 +251,11 @@ def run_simulation(
 
         funnel = day_results.get("state_machine_funnel", {})
         log.info(f"State machine: {funnel}")
+        gb = global_budget
+        gb_pct = gb["remaining"] / max(gb["max"], 1) * 100
         log.info(
-            f"Budget: avg_remaining={day_results.get('avg_budget_remaining', 0):.1f}, "
-            f"exhausted_patients={day_results.get('budget_exhausted_count', 0)}"
+            f"Global budget: {gb['remaining']:,}/{gb['max']:,} ({gb_pct:.0f}% remaining), "
+            f"used today: {day_results.get('global_budget_used', 0) - (gb['total_sent'] - day_results['num_actions'])}"
         )
 
         # --- NIGHT PHASE ---
@@ -289,8 +299,8 @@ def run_simulation(
             model_version=model_version,
             action_distribution=day_results.get("action_distribution"),
             state_machine_funnel=day_results.get("state_machine_funnel"),
-            avg_budget_remaining=day_results.get("avg_budget_remaining"),
-            budget_exhausted_count=day_results.get("budget_exhausted_count", 0),
+            avg_budget_remaining=global_budget["remaining"],
+            budget_exhausted_count=0,  # Global budget — no per-patient exhaustion
         )
 
         # Save cumulative metrics for dashboard

@@ -28,50 +28,56 @@ def run_daily_cycle(
     state_machine: ActionLifecycleTracker,
     lagged_queue: LaggedRewardQueue,
     rng: np.random.Generator = None,
-    patient_budgets: Dict[str, Dict[str, int]] = None,
+    global_budget: Dict[str, Any] = None,
 ) -> Dict[str, Any]:
     """Run one simulated day of the RL agent interacting with patients.
 
     Args:
-        day: Simulation day number (1-30).
+        day: Simulation day number.
         agent: Trained policy with get_action_greedy(obs, mask) method.
         patient_snapshots: Current state of all patients.
         eligibility_snapshots: Current eligibility for all patients.
         state_machine: Action lifecycle tracker.
         lagged_queue: Delayed reward queue.
         rng: Random number generator.
-
-    Returns:
-        Dict with daily results: actions taken, rewards, experiences, etc.
+        global_budget: Shared budget dict with keys: remaining, max, patient_stats.
     """
     if rng is None:
         rng = np.random.default_rng()
 
-    from config import MESSAGE_BUDGET_PER_QUARTER, BUDGET_REPLENISH_INTERVAL_DAYS
+    from config import compute_global_budget, MAX_CONTACTS_PER_WEEK
 
-    # Initialize patient budgets if not provided
-    if patient_budgets is None:
-        patient_budgets = {}
+    # Initialize global budget if not provided
+    if global_budget is None:
+        total = compute_global_budget(len(patient_snapshots))
+        global_budget = {
+            "remaining": total,
+            "max": total,
+            "total_sent": 0,
+            "patient_stats": {},  # per-patient: messages_sent, channels_used, responses, last_closure_day
+        }
+
+    # Initialize per-patient stats for any new patients
     for snap in patient_snapshots:
         pid = snap["patient_id"]
-        if pid not in patient_budgets:
-            patient_budgets[pid] = {
-                "remaining": MESSAGE_BUDGET_PER_QUARTER,
-                "max": MESSAGE_BUDGET_PER_QUARTER,
-                "total_sent": 0,
-                "quarter_start_day": 1,
+        if pid not in global_budget["patient_stats"]:
+            global_budget["patient_stats"][pid] = {
+                "messages_sent": 0,
                 "contacts_this_week": 0,
                 "week_start_day": 1,
+                "channels_used": set(),
+                "responses": 0,     # clicks/accepts
+                "last_closure_day": 0,
             }
-        budget = patient_budgets[pid]
-        # Quarterly budget replenishment
-        if day - budget["quarter_start_day"] >= BUDGET_REPLENISH_INTERVAL_DAYS:
-            budget["remaining"] = MESSAGE_BUDGET_PER_QUARTER
-            budget["quarter_start_day"] = day
+        ps = global_budget["patient_stats"][pid]
         # Weekly contact counter reset
-        if day - budget.get("week_start_day", 1) >= 7:
-            budget["contacts_this_week"] = 0
-            budget["week_start_day"] = day
+        if day - ps.get("week_start_day", 1) >= 7:
+            ps["contacts_this_week"] = 0
+            ps["week_start_day"] = day
+
+    # Compute cohort-level stats for state features
+    all_patient_msgs = [ps["messages_sent"] for ps in global_budget["patient_stats"].values()]
+    cohort_avg_messages = np.mean(all_patient_msgs) if all_patient_msgs else 0.0
 
     eligibility_map = {e["patient_id"]: e for e in eligibility_snapshots}
 
@@ -81,7 +87,6 @@ def run_daily_cycle(
     gap_closures = {m: 0 for m in HEDIS_MEASURES}
     total_patients = {m: 0 for m in HEDIS_MEASURES}
     action_counts: Dict[str, int] = {}
-    budget_exhausted_count = 0
 
     for snap in patient_snapshots:
         pid = snap["patient_id"]
@@ -95,18 +100,23 @@ def run_daily_cycle(
         pending = state_machine.get_pending_actions(pid)
         pending_measures = {p["measure"] for p in pending}
 
-        # Get patient budget
-        budget = patient_budgets[pid]
-        budget_remaining = budget["remaining"]
+        # Per-patient stats (live features updated each day)
+        ps = global_budget["patient_stats"][pid]
 
-        # Build state vector with budget info
+        # Build state vector with LIVE features
         state_vec = snapshot_to_vector(
-            snap, day_of_year=day * 12,
-            budget_remaining=budget_remaining,
-            budget_max=budget["max"],
+            snap, day_of_year=day * 4,  # ~4 days per sim day to spread across year
+            budget_remaining=global_budget["remaining"],
+            budget_max=global_budget["max"],
+            patient_messages_received=ps["messages_sent"],
+            cohort_avg_messages=cohort_avg_messages,
+            patient_response_rate=ps["responses"] / max(ps["messages_sent"], 1),
+            patient_avg_gap_age=day * 4.0,  # Approximate gap age
+            patient_days_since_closure=max(0, day - ps.get("last_closure_day", 0)) if ps.get("last_closure_day", 0) > 0 else 90.0,
+            patient_channels_used=len(ps.get("channels_used", set())),
         )
 
-        # Compute action mask (budget-aware)
+        # Compute action mask (global budget-aware)
         engagement = snap.get("engagement", {})
         channel_avail = {
             "sms": engagement.get("sms_consent", False),
@@ -116,19 +126,15 @@ def run_daily_cycle(
             "ivr": True,
         }
 
-        # Additional masking: block measures with pending actions
-        recent_measures = {m: 0 for m in pending_measures}  # Treat as "just contacted"
+        recent_measures = {m: 0 for m in pending_measures}
 
         mask = compute_action_mask(
             open_gaps=open_gaps,
             channel_availability=channel_avail,
-            contacts_this_week=budget.get("contacts_this_week", 0),
+            contacts_this_week=ps.get("contacts_this_week", 0),
             recent_measures=recent_measures,
-            budget_remaining=budget_remaining,
+            budget_remaining=global_budget["remaining"],
         )
-
-        if budget_remaining <= 0:
-            budget_exhausted_count += 1
 
         # Agent selects action
         if hasattr(agent, "get_action_greedy"):
@@ -193,22 +199,27 @@ def run_daily_cycle(
                 closure_prob=min(closure_prob, cfg.CLOSURE_PROB_CAP),
             )
 
-            # Compute immediate reward (budget-aware)
+            # Compute immediate reward (global budget-aware)
             reward = compute_reward(
                 measure=action_info.measure,
                 delivered=signals["delivered"],
                 opened=signals["opened"],
                 clicked=signals["clicked"],
-                gap_closed=False,  # Gap closure is lagged
+                gap_closed=False,
                 is_no_action=False,
-                budget_remaining=budget_remaining,
-                budget_max=budget["max"],
+                budget_remaining=global_budget["remaining"],
+                budget_max=global_budget["max"],
             )
 
-            # Decrement patient budget and increment weekly counter
-            budget["remaining"] = max(0, budget["remaining"] - 1)
-            budget["total_sent"] += 1
-            budget["contacts_this_week"] = budget.get("contacts_this_week", 0) + 1
+            # Decrement GLOBAL budget + update per-patient stats
+            global_budget["remaining"] = max(0, global_budget["remaining"] - 1)
+            global_budget["total_sent"] += 1
+            ps["messages_sent"] += 1
+            ps["contacts_this_week"] = ps.get("contacts_this_week", 0) + 1
+            if isinstance(ps.get("channels_used"), set):
+                ps["channels_used"].add(action_info.channel)
+            else:
+                ps["channels_used"] = {action_info.channel}
 
             # Track
             act_key = f"{action_info.measure}_{action_info.channel}"
@@ -217,8 +228,8 @@ def run_daily_cycle(
             # No action taken — compute budget conservation reward
             reward = compute_reward(
                 measure=None, is_no_action=True,
-                budget_remaining=budget_remaining,
-                budget_max=budget["max"],
+                budget_remaining=global_budget["remaining"],
+                budget_max=global_budget["max"],
             )
             signals = {"delivered": False, "opened": False, "clicked": False}
 
@@ -232,8 +243,9 @@ def run_daily_cycle(
             "reward": reward,
             "day": day,
             "engagement": signals if not is_no_act else {},
-            "budget_remaining": budget["remaining"],
-            "budget_max": budget["max"],
+            "budget_remaining": global_budget["remaining"],
+            "budget_max": global_budget["max"],
+            "patient_messages": ps["messages_sent"],
         })
 
         # Store experience for retraining
@@ -297,7 +309,8 @@ def run_daily_cycle(
         "resolved_rewards": len(resolved),
         "pending_rewards": lagged_queue.get_pending_count(),
         "state_machine_funnel": state_machine.get_funnel_stats(),
-        "budget_exhausted_count": budget_exhausted_count,
-        "avg_budget_remaining": np.mean([b["remaining"] for b in patient_budgets.values()]),
-        "patient_budgets": patient_budgets,
+        "global_budget_remaining": global_budget["remaining"],
+        "global_budget_max": global_budget["max"],
+        "global_budget_used": global_budget["total_sent"],
+        "global_budget": global_budget,
     }
