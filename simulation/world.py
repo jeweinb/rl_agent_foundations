@@ -36,19 +36,23 @@ class PatientState:
         "pid", "snapshot", "messages_sent", "contact_days",
         "channels_used", "responses", "last_closure_day",
         "recent_measures", "last_email_day", "closed_measures",
+        "channel_action_counts", "channel_last_day",
     ]
 
     def __init__(self, pid: str, snapshot: Dict[str, Any]):
         self.pid = pid
         self.snapshot = snapshot
         self.messages_sent = 0
-        self.contact_days: List[int] = []   # Rolling 7-day window
+        self.contact_days: List[int] = []   # Rolling 30-day window
         self.channels_used: Set[str] = set()
         self.responses = 0                   # Clicks/accepts
         self.last_email_day = -999            # Day last email was sent
         self.last_closure_day = 0
         self.recent_measures: Dict[str, int] = {}  # measure → day last contacted
         self.closed_measures: Set[str] = set()  # Measures that have been closed
+        # Lifetime channel affinity tracking
+        self.channel_action_counts: Dict[str, int] = {"sms": 0, "email": 0, "portal": 0, "app": 0, "ivr": 0}
+        self.channel_last_day: Dict[str, int] = {"sms": -999, "email": -999, "portal": -999, "app": -999, "ivr": -999}
 
     @property
     def response_rate(self) -> float:
@@ -58,8 +62,8 @@ class PatientState:
         """Count contacts within the rolling window."""
         return sum(1 for d in self.contact_days if current_day - d < window)
 
-    def prune_contact_window(self, current_day: int, window: int = 7):
-        """Remove contact days outside the rolling window."""
+    def prune_contact_window(self, current_day: int, window: int = 30):
+        """Remove contact days outside the rolling window. Keep 30 days for 7d/14d/30d features."""
         self.contact_days = [d for d in self.contact_days if current_day - d < window]
 
     def age_recent_measures(self, current_day: int):
@@ -175,6 +179,12 @@ class WorldSimulator:
             patient_avg_gap_age=self.day * 4.0,
             num_pending_actions=len(pending),
             num_in_flight_measures=len(pending_measures),
+            # Channel affinity: lifetime counts + recency
+            channel_affinity_counts=ps.channel_action_counts,
+            channel_affinity_recency={
+                ch: (self.day - d if d >= 0 else 90)
+                for ch, d in ps.channel_last_day.items()
+            },
         )
 
         # If dynamics model available, blend with learned state prediction
@@ -290,6 +300,8 @@ class WorldSimulator:
         ps.messages_sent += 1
         ps.contact_days.append(self.day)
         ps.channels_used.add(action_info.channel)
+        ps.channel_action_counts[action_info.channel] = ps.channel_action_counts.get(action_info.channel, 0) + 1
+        ps.channel_last_day[action_info.channel] = self.day
         ps.recent_measures[action_info.measure] = self.day
         if action_info.channel == "email":
             ps.last_email_day = self.day
@@ -438,9 +450,16 @@ class WorldSimulator:
             self.budget_remaining -= budget_used
             self.budget_used += budget_used
 
-        # Resolve any immediate lagged rewards
+        # Resolve any immediate lagged rewards and track in closed_measures
         resolved = self.lagged_queue.collect(0)
-        day0_closures = sum(1 for r in resolved if r["will_close"])
+        day0_closures = 0
+        for r in resolved:
+            if r["will_close"]:
+                day0_closures += 1
+                ps = self.patients.get(r["patient_id"])
+                if ps:
+                    ps.closed_measures.add(r["measure"])
+                    ps.last_closure_day = 0
 
         return {
             "stats": stats,

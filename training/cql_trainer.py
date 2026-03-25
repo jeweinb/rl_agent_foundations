@@ -327,7 +327,7 @@ def train_cql(
     batch_size: int = 256,
     lr: float = None,
     min_q_weight: float = None,
-    gamma: float = 0.99,
+    gamma: float = 0.97,
     verbose: bool = True,
 ) -> ActorCriticCQL:
     """Train Actor-Critic CQL on offline episodes.
@@ -387,12 +387,27 @@ def train_cql(
     if verbose:
         print(f"CQL-SAC training: {len(dataset)} transitions, {epochs} epochs")
 
-    # Initialize agent
+    # Initialize agent or update existing agent's hyperparameters
     if agent is None:
         agent = ActorCriticCQL(
             lr_actor=lr, lr_critic=lr, lr_alpha=lr,
             gamma=gamma, min_q_weight=min_q_weight,
         )
+    else:
+        # Ensure existing agent uses current config values (not stale from init)
+        agent.gamma = gamma
+        agent.min_q_weight = min_q_weight
+        agent.cql_target_penalty = min_q_weight
+        agent.use_lagrangian = CQL_CONFIG.get("lagrangian", False)
+        # Update ALL optimizer learning rates
+        for param_group in agent.actor_optimizer.param_groups:
+            param_group['lr'] = lr
+        for param_group in agent.critic_optimizer.param_groups:
+            param_group['lr'] = lr
+        for param_group in agent.alpha_optimizer.param_groups:
+            param_group['lr'] = lr
+        for param_group in agent.cql_alpha_optimizer.param_groups:
+            param_group['lr'] = lr
 
     # Initialize actor from BC policy if provided
     if bc_policy is not None:

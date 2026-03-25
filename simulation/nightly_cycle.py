@@ -170,8 +170,9 @@ def run_nightly_cycle(
         import torch
 
         if dynamics_model is not None and total_transitions > 10:
+            from config import DYNAMICS_MODEL_CONFIG, REWARD_MODEL_CONFIG
             dynamics_model.train()
-            opt_d = torch.optim.Adam(dynamics_model.parameters(), lr=1e-4)
+            opt_d = torch.optim.Adam(dynamics_model.parameters(), lr=DYNAMICS_MODEL_CONFIG["lr"])
             # Train on ALL episodes (same batch as CQL)
             for ep in training_episodes:
                 if len(ep["obs"]) < 2:
@@ -187,7 +188,7 @@ def run_nightly_cycle(
 
         if reward_model is not None and total_transitions > 10:
             reward_model.train()
-            opt_r = torch.optim.Adam(reward_model.parameters(), lr=1e-4)
+            opt_r = torch.optim.Adam(reward_model.parameters(), lr=REWARD_MODEL_CONFIG["lr"])
             # Train on ALL episodes (same batch as CQL)
             for ep in training_episodes:
                 if len(ep["obs"]) < 2:
@@ -311,12 +312,20 @@ def run_nightly_cycle(
             "step_history": getattr(challenger, '_step_history', []),
         }
 
-    # Compute Q-value stats for debugging
+    # Compute Q-value stats using REAL patient states (not random noise)
     try:
         import torch
         champion.critic.eval()
         with torch.no_grad():
-            sample = torch.randn(100, STATE_DIM)
+            # Use today's actual experience states for meaningful Q-value stats
+            real_states = []
+            for ep in training_episodes[:50]:
+                if len(ep["obs"]) > 0:
+                    real_states.append(ep["obs"][0])
+            if real_states:
+                sample = torch.FloatTensor(np.array(real_states[:100]))
+            else:
+                sample = torch.zeros(10, STATE_DIM)
             q_min = champion.critic.q_min(sample)
             training_debug["q_mean"] = float(q_min.mean())
             training_debug["q_std"] = float(q_min.std())

@@ -131,16 +131,16 @@ Index	Tier	Category	Feature Name	Description	Normalization	Clinical Definition /
 129	Action	Pending Actions	num_pending_actions_norm	Actions currently in-flight	count / 5	Count of actions in non-terminal state machine states (CREATED, QUEUED, PRESENTED, VIEWED).	State machine: COUNT(WHERE patient_id=X AND state NOT IN terminal_states)
 130	Action	Pending Actions	num_in_flight_measures	Distinct measures with pending actions	count / 18	Count distinct measures among pending actions. Avoids re-targeting same measure.	State machine: COUNT(DISTINCT measure WHERE pending)
 131	Action	Pending Actions	has_action_in_flight	Any action in-flight flag	binary	1.0 if num_pending_actions > 0. Quick check for active outreach.	Derived from num_pending_actions
-132	Action	Action History	last_action_0_measure	Most recent action: measure index	idx / 18	Measure index of the most recently sent action. 0-17 mapped to HEDIS_MEASURES order.	Outreach log: most recent action's measure
-133	Action	Action History	last_action_0_channel	Most recent action: channel index	idx / 5	Channel index: 0=sms, 1=email, 2=portal, 3=app, 4=ivr.	Outreach log: most recent action's channel
-134	Action	Action History	last_action_1_measure	2nd recent action: measure	idx / 18	Same as above for 2nd most recent action.	Outreach log
-135	Action	Action History	last_action_1_channel	2nd recent action: channel	idx / 5	Channel of 2nd most recent action.	Outreach log
-136	Action	Action History	last_action_2_measure	3rd recent action: measure	idx / 18	3rd most recent.	Outreach log
-137	Action	Action History	last_action_2_channel	3rd recent action: channel	idx / 5	3rd most recent.	Outreach log
-138	Action	Action History	last_action_3_measure	4th recent action: measure	idx / 18	4th most recent.	Outreach log
-139	Action	Action History	last_action_3_channel	4th recent action: channel	idx / 5	4th most recent.	Outreach log
-140	Action	Action History	last_action_4_measure	5th recent action: measure	idx / 18	5th most recent.	Outreach log
-141	Action	Action History	last_action_4_channel	5th recent action: channel	idx / 5	5th most recent.	Outreach log
+132	Action	Channel Affinity (Volume)	lifetime_sms_count_norm	Lifetime SMS actions sent to this patient	count / 10	Total SMS outreach messages ever sent to this patient. Captures channel usage volume. Combined with success rates (114-118) and recency (137-141), gives full channel affinity profile.	Outreach log: COUNT(WHERE patient_id=X AND channel='sms')
+133	Action	Channel Affinity (Volume)	lifetime_email_count_norm	Lifetime email actions sent	count / 10	Total email outreach messages ever sent.	Outreach log: COUNT(WHERE channel='email')
+134	Action	Channel Affinity (Volume)	lifetime_portal_count_norm	Lifetime portal actions sent	count / 10	Total portal outreach messages ever sent.	Outreach log: COUNT(WHERE channel='portal')
+135	Action	Channel Affinity (Volume)	lifetime_app_count_norm	Lifetime app actions sent	count / 10	Total app outreach messages ever sent.	Outreach log: COUNT(WHERE channel='app')
+136	Action	Channel Affinity (Volume)	lifetime_ivr_count_norm	Lifetime IVR actions sent	count / 10	Total IVR outreach calls ever made.	Outreach log: COUNT(WHERE channel='ivr')
+137	Action	Channel Affinity (Recency)	days_since_last_sms_norm	Days since last SMS to this patient	days / 90	Calendar days since the most recent SMS was sent. 90 = never or very long ago. Captures channel recency.	Outreach log: DATEDIFF(today, MAX(send_date WHERE channel='sms'))
+138	Action	Channel Affinity (Recency)	days_since_last_email_norm	Days since last email	days / 90	Calendar days since last email.	Outreach log: DATEDIFF(today, MAX(send_date WHERE channel='email'))
+139	Action	Channel Affinity (Recency)	days_since_last_portal_norm	Days since last portal message	days / 90	Calendar days since last portal outreach.	Outreach log: DATEDIFF(today, MAX(send_date WHERE channel='portal'))
+140	Action	Channel Affinity (Recency)	days_since_last_app_norm	Days since last app push	days / 90	Calendar days since last app push notification.	Outreach log: DATEDIFF(today, MAX(send_date WHERE channel='app'))
+141	Action	Channel Affinity (Recency)	days_since_last_ivr_norm	Days since last IVR call	days / 90	Calendar days since last IVR call.	Outreach log: DATEDIFF(today, MAX(send_date WHERE channel='ivr'))
 142	Action	Gap-Specific	gap_0_days_since_attempt	Top gap: days since last attempt	days / 90	For the highest-priority open gap: days since last outreach targeting this measure.	Outreach log: DATEDIFF(today, MAX(send_date WHERE measure=X))
 143	Action	Gap-Specific	gap_0_attempt_count	Top gap: total attempts	count / 10	Total outreach attempts for this measure for this patient this year.	Outreach log: COUNT(WHERE measure=X AND patient_id=Y)
 144	Action	Gap-Specific	gap_1_days_since_attempt	2nd gap: days since attempt	days / 90	Same for 2nd priority gap.	Outreach log
@@ -151,15 +151,27 @@ Index	Tier	Category	Feature Name	Description	Normalization	Clinical Definition /
 149	Action	Gap-Specific	gap_3_attempt_count	4th gap: total attempts	count / 10	Same for 4th priority gap.	Outreach log
 150	Action	Gap-Specific	gap_4_days_since_attempt	5th gap: days since attempt	days / 90	Same for 5th priority gap.	Outreach log
 151	Action	Gap-Specific	gap_4_attempt_count	5th gap: total attempts	count / 10	Same for 5th priority gap.	Outreach log
-152	Action	Measure Attempts	priority_gap_0_measure_idx	#1 priority gap: measure index	idx / 18	Measure index of highest-priority open gap (ranked by CMS weight then gap age).	Derived: sort open_gaps by weight DESC, age DESC
-153	Action	Measure Attempts	priority_gap_0_attempt_count	#1 priority gap: attempts	count / 10	Total outreach attempts for this top priority measure.	Outreach log
-154	Action	Measure Attempts	priority_gap_0_best_channel	#1 priority gap: best channel	idx / 5	Channel with highest success rate for this measure for this patient.	State machine: argmax(success_rate by channel for this measure)
-155	Action	Measure Attempts	priority_gap_0_days_since	#1 priority gap: days since	days / 90	Days since last attempt at this priority gap.	Outreach log
-156	Action	Measure Attempts	priority_gap_1_measure_idx	#2 priority gap: measure index	idx / 18	Same for 2nd priority gap.	Derived
-157	Action	Measure Attempts	priority_gap_1_attempt_count	#2 priority gap: attempts	count / 10	Same for 2nd priority.	Outreach log
-158	Action	Measure Attempts	priority_gap_1_best_channel	#2 priority gap: best channel	idx / 5	Same for 2nd priority.	State machine
-159	Action	Measure Attempts	priority_gap_1_days_since	#2 priority gap: days since	days / 90	Same for 2nd priority.	Outreach log
-160	Action	Measure Attempts	priority_gap_2_measure_idx	#3 priority gap: measure index	idx / 18	Same for 3rd priority gap.	Derived
-161	Action	Measure Attempts	priority_gap_2_attempt_count	#3 priority gap: attempts	count / 10	Same for 3rd priority.	Outreach log
-162	Action	Measure Attempts	priority_gap_2_best_channel	#3 priority gap: best channel	idx / 5	Same for 3rd priority.	State machine
-163	Action	Measure Attempts	priority_gap_2_days_since	#3 priority gap: days since	days / 90	Same for 3rd priority.	Outreach log
+152	Action	Measure Attempts	priority_gap_0_weight_norm	#1 priority gap: CMS measure weight	weight / 3	CMS weight of highest-priority open gap (3=outcome, 1=process). Ranked by weight DESC then gap age DESC. Meaningful ordinal, not arbitrary index.	Derived: MEASURE_WEIGHTS[measure] / 3.0
+153	Action	Measure Attempts	priority_gap_0_attempt_count	#1 priority gap: attempts	count / 10	Total outreach attempts for this top priority measure.	Outreach log: COUNT(WHERE measure=X AND patient_id=Y)
+154	Action	Measure Attempts	priority_gap_0_days_since	#1 priority gap: days since	days / 90	Days since last attempt at this priority gap.	Outreach log: DATEDIFF(today, MAX(send_date WHERE measure=X))
+155	Action	Measure Attempts	priority_gap_0_best_ch_sms	#1 priority gap: best channel is SMS	binary	One-hot: 1.0 if SMS has highest success rate for this measure for this patient.	State machine: argmax(success_rate by channel) == 'sms'
+156	Action	Measure Attempts	priority_gap_0_best_ch_email	#1 priority gap: best channel is email	binary	One-hot: 1.0 if email has highest success rate.	State machine: argmax(success_rate by channel) == 'email'
+157	Action	Measure Attempts	priority_gap_0_best_ch_portal	#1 priority gap: best channel is portal	binary	One-hot: 1.0 if portal has highest success rate.	State machine: argmax(success_rate by channel) == 'portal'
+158	Action	Measure Attempts	priority_gap_0_best_ch_app	#1 priority gap: best channel is app	binary	One-hot: 1.0 if app has highest success rate.	State machine: argmax(success_rate by channel) == 'app'
+159	Action	Measure Attempts	priority_gap_0_best_ch_ivr	#1 priority gap: best channel is IVR	binary	One-hot: 1.0 if IVR has highest success rate.	State machine: argmax(success_rate by channel) == 'ivr'
+160	Action	Measure Attempts	priority_gap_1_weight_norm	#2 priority gap: CMS measure weight	weight / 3	CMS weight of 2nd priority gap.	Derived: MEASURE_WEIGHTS[measure] / 3.0
+161	Action	Measure Attempts	priority_gap_1_attempt_count	#2 priority gap: attempts	count / 10	Same for 2nd priority.	Outreach log
+162	Action	Measure Attempts	priority_gap_1_days_since	#2 priority gap: days since	days / 90	Same for 2nd priority.	Outreach log
+163	Action	Measure Attempts	priority_gap_1_best_ch_sms	#2 priority gap: best channel is SMS	binary	Same for 2nd priority.	State machine
+164	Action	Measure Attempts	priority_gap_1_best_ch_email	#2 priority gap: best channel is email	binary	Same for 2nd priority.	State machine
+165	Action	Measure Attempts	priority_gap_1_best_ch_portal	#2 priority gap: best channel is portal	binary	Same for 2nd priority.	State machine
+166	Action	Measure Attempts	priority_gap_1_best_ch_app	#2 priority gap: best channel is app	binary	Same for 2nd priority.	State machine
+167	Action	Measure Attempts	priority_gap_1_best_ch_ivr	#2 priority gap: best channel is IVR	binary	Same for 2nd priority.	State machine
+168	Action	Measure Attempts	priority_gap_2_weight_norm	#3 priority gap: CMS measure weight	weight / 3	CMS weight of 3rd priority gap.	Derived: MEASURE_WEIGHTS[measure] / 3.0
+169	Action	Measure Attempts	priority_gap_2_attempt_count	#3 priority gap: attempts	count / 10	Same for 3rd priority.	Outreach log
+170	Action	Measure Attempts	priority_gap_2_days_since	#3 priority gap: days since	days / 90	Same for 3rd priority.	Outreach log
+171	Action	Measure Attempts	priority_gap_2_best_ch_sms	#3 priority gap: best channel is SMS	binary	Same for 3rd priority.	State machine
+172	Action	Measure Attempts	priority_gap_2_best_ch_email	#3 priority gap: best channel is email	binary	Same for 3rd priority.	State machine
+173	Action	Measure Attempts	priority_gap_2_best_ch_portal	#3 priority gap: best channel is portal	binary	Same for 3rd priority.	State machine
+174	Action	Measure Attempts	priority_gap_2_best_ch_app	#3 priority gap: best channel is app	binary	Same for 3rd priority.	State machine
+175	Action	Measure Attempts	priority_gap_2_best_ch_ivr	#3 priority gap: best channel is IVR	binary	Same for 3rd priority.	State machine

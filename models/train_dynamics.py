@@ -59,21 +59,23 @@ def prepare_transition_data(
 
         # If gap was closed, update the gap flag
         if record["outcome"]["gap_closed_within_30d"]:
-            from config import HEDIS_MEASURES
+            from config import HEDIS_MEASURES, FEAT_IDX_GAP_FLAGS_START
             measure = record["measure"]
             if measure in HEDIS_MEASURES:
-                gap_idx = 24 + HEDIS_MEASURES.index(measure)  # offset to gap flags
+                gap_idx = FEAT_IDX_GAP_FLAGS_START + HEDIS_MEASURES.index(measure)
                 delta[gap_idx] = -state_vec[gap_idx]  # Set to 0 (closed)
 
-        # Engagement affects response rates slightly
+        # Engagement affects response rates slightly (Tier 3: engagement rates at indices 119-123)
+        from config import FEAT_IDX_ENGAGEMENT_START
         if record["outcome"]["clicked"]:
-            delta[rng.integers(53, 58)] += 0.02  # Bump a response rate
+            delta[rng.integers(FEAT_IDX_ENGAGEMENT_START, FEAT_IDX_ENGAGEMENT_START + 5)] += 0.02
 
-        # Contact count increases
-        delta[59] = min(0.05, delta[59] + 0.05)  # total_contacts_90d
+        # Contact count increases (Tier 3: patient_contacts_30d at index 110)
+        from config import FEAT_IDX_CONTACT_HISTORY_START
+        delta[FEAT_IDX_CONTACT_HISTORY_START + 4] = min(0.05, delta[FEAT_IDX_CONTACT_HISTORY_START + 4] + 0.05)
 
-        # Days since contact resets
-        delta[60] = -state_vec[60]  # Reset to 0
+        # Days since contact resets (Tier 3: patient_days_since_last_contact at index 111)
+        delta[FEAT_IDX_CONTACT_HISTORY_START + 5] = -state_vec[FEAT_IDX_CONTACT_HISTORY_START + 5]
 
         next_state = np.clip(state_vec + delta, -5.0, 5.0)
         states.append(state_vec)

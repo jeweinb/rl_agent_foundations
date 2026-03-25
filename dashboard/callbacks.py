@@ -53,6 +53,44 @@ from dashboard.data_feed import (
     load_all_state_machine_data, load_simulation_logs,
 )
 
+# --- Stable Q-value helpers ---
+import torch
+import numpy as np
+import json
+import os
+
+_q_ema = None  # Lifetime exponential moving average of Q-values
+_q_ema_alpha = 0.3  # Blend factor: 30% new, 70% history
+
+
+def _load_representative_states(state_dim: int) -> torch.Tensor:
+    """Load real patient states from the most recent experience buffer."""
+    from config import SIMULATION_DATA_DIR
+    # Try loading from most recent simulation day
+    for day in range(90, 0, -1):
+        path = os.path.join(SIMULATION_DATA_DIR, f"day_{day:02d}", "experience_buffer.json")
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    experiences = json.load(f)
+                if experiences:
+                    obs = [e["obs"] for e in experiences[:200]]  # Up to 200 real states
+                    return torch.FloatTensor(np.array(obs, dtype=np.float32))
+            except Exception:
+                continue
+    # Fallback: use zeros (neutral state) rather than random noise
+    return torch.zeros(100, state_dim)
+
+
+def _update_q_ema(new_q: np.ndarray) -> np.ndarray:
+    """Blend new Q-values with lifetime EMA for stability."""
+    global _q_ema
+    if _q_ema is None or len(_q_ema) != len(new_q):
+        _q_ema = new_q.copy()
+    else:
+        _q_ema = _q_ema_alpha * new_q + (1 - _q_ema_alpha) * _q_ema
+    return _q_ema.copy()
+
 
 def register_callbacks(app):
     """Register all callbacks with the Dash app."""
@@ -433,13 +471,15 @@ def register_callbacks(app):
                 except Exception:
                     agent = ActorCriticCQL()
 
-                # Get average Q-value per action across a sample of states
+                # Get average Q-value per action across REAL patient states
                 agent.critic.eval()
                 with torch.no_grad():
-                    # Use random states as a representative sample
-                    sample_states = torch.randn(100, STATE_DIM)
-                    q_min = agent.critic.q_min(sample_states)  # (100, NUM_ACTIONS)
+                    # Load real patient states from most recent experience buffer
+                    sample_states = _load_representative_states(STATE_DIM)
+                    q_min = agent.critic.q_min(sample_states)  # (N, NUM_ACTIONS)
                     avg_q = q_min.mean(dim=0).numpy()  # (NUM_ACTIONS,)
+                    # Blend with lifetime EMA for stability
+                    avg_q = _update_q_ema(avg_q)
 
                 # Build leaderboard from Q-values
                 action_data = []

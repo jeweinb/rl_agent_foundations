@@ -265,7 +265,7 @@ SECOND_BEST_CHANNEL_BY_CATEGORY: Dict[str, str] = {
 # ---------------------------------------------------------------------------
 # State Space
 # ---------------------------------------------------------------------------
-STATE_DIM = 164  # 3-tier: patient(86) + system(20) + action(58)
+STATE_DIM = 176  # 3-tier: patient(86) + system(20) + action(70)
 
 # ---------------------------------------------------------------------------
 # Cohort & Simulation
@@ -323,8 +323,8 @@ FEAT_IDX_GAP_CONTEXT_START = 124     # 5 features
 FEAT_IDX_PENDING_ACTIONS_START = 129 # 3 features
 FEAT_IDX_ACTION_HISTORY_START = 132  # 10 features
 FEAT_IDX_GAP_SPECIFIC_START = 142    # 10 features
-FEAT_IDX_MEASURE_ATTEMPTS_START = 152  # 12 features
-TIER3_END = 164
+FEAT_IDX_MEASURE_ATTEMPTS_START = 152  # 24 features (8 per priority gap × 3 gaps)
+TIER3_END = 176
 
 # Normalization constants
 CONTACT_NORMALIZATION_MAX = 20

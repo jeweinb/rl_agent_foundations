@@ -6,15 +6,16 @@ info:
     1. **Inference Endpoint** — real-time request/response for next-best-action
     2. **Nightly Training Job** — batch process (Databricks) for model retraining
 
-    The model uses a **3-tier feature architecture** (164 dimensions):
+    The model uses a **3-tier feature architecture** (176 dimensions):
     - **Tier 1 — Patient State (86):** Demographics, clinical vitals, conditions,
       medications, gap flags, risk scores, channel availability, and per-measure
       clinical indicators
     - **Tier 2 — System State (20):** Global budget, temporal context, cohort
       population stats, STARS progress, and cohort channel effectiveness
-    - **Tier 3 — Action Context (58):** Patient contact history, per-channel
+    - **Tier 3 — Action Context (70):** Patient contact history, per-channel
       success rates, engagement rates, gap context, pending actions, action
-      history, and per-measure attempt summaries
+      history (channel + category frequency distributions), and per-measure
+      attempt summaries (with one-hot channel encoding, no index features)
   version: "2.0.0"
 
 paths:
@@ -387,7 +388,7 @@ components:
     StateVector:
       type: object
       description: |
-        164-dimensional feature vector organized in 3 tiers.
+        176-dimensional feature vector organized in 3 tiers.
         This documents the internal representation — callers provide
         structured JSON (PredictionRequest), the server constructs the vector.
       properties:
@@ -498,7 +499,7 @@ components:
 
         tier3_action_context:
           type: object
-          description: "Indices 106-163 (58 features)"
+          description: "Indices 106-175 (70 features)"
           properties:
             contact_history:
               type: string
@@ -535,10 +536,14 @@ components:
                 [129] num_pending_actions_norm (pending/5)
                 [130] num_in_flight_measures (measures/18)
                 [131] has_action_in_flight (binary)
-            action_history:
+            channel_affinity:
               type: string
               description: |
-                [132-141] Last 5 actions as (measure_idx_norm, channel_idx_norm)
+                [132-141] Lifetime channel affinity (volume + recency):
+                Volume (132-136): lifetime action count per channel / 10
+                Recency (137-141): days since last use of each channel / 90
+                Combined with per-channel success rates (114-118) gives
+                complete affinity: volume + recency + effectiveness
             gap_specific_detail:
               type: string
               description: |
@@ -546,8 +551,10 @@ components:
             measure_attempt_summary:
               type: string
               description: |
-                [152-163] Top 3 priority open gaps:
-                (measure_idx, attempt_count, best_channel, days_since_last)
+                [152-175] Top 3 priority open gaps × 8 features each:
+                (weight_norm, attempt_count, days_since,
+                 best_ch_sms, best_ch_email, best_ch_portal, best_ch_app, best_ch_ivr)
+                Channel encoded as one-hot binary flags, not index.
 
     # ===================================================================
     # NIGHTLY TRAINING JOB SCHEMAS
@@ -570,7 +577,7 @@ components:
               obs:
                 type: array
                 items: { type: number }
-                description: "164-dim state vector (3-tier)"
+                description: "176-dim state vector (3-tier: patient 86 + system 20 + action 70)"
               action: { type: integer, description: Action ID taken }
               reward: { type: number, description: Immediate reward (may be retroactively updated) }
               mask:

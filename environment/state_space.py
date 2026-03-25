@@ -156,19 +156,33 @@ def _build_feature_names():
         "num_in_flight_measures",      # Distinct measures with pending actions / 18
         "has_action_in_flight",        # 1.0 if any action is currently in-flight
     ])
-    # Action history (10) — last 5 actions as (measure_idx, channel_idx)
-    for i in range(5):
-        names.extend([f"last_action_{i}_measure", f"last_action_{i}_channel"])
+    # Channel affinity (10) — lifetime usage volume + recency per channel
+    names.extend([
+        "lifetime_sms_count_norm",     # Total SMS actions sent to this patient / 10
+        "lifetime_email_count_norm",   # Total email actions / 10
+        "lifetime_portal_count_norm",  # Total portal actions / 10
+        "lifetime_app_count_norm",     # Total app actions / 10
+        "lifetime_ivr_count_norm",     # Total IVR actions / 10
+        "days_since_last_sms_norm",    # Days since last SMS / 90
+        "days_since_last_email_norm",  # Days since last email / 90
+        "days_since_last_portal_norm", # Days since last portal / 90
+        "days_since_last_app_norm",    # Days since last app / 90
+        "days_since_last_ivr_norm",    # Days since last IVR / 90
+    ])
     # Gap-specific detail (10) — top 5 open gaps
     for i in range(5):
         names.extend([f"gap_{i}_days_since_attempt", f"gap_{i}_attempt_count"])
-    # Per-measure attempt summary (12) — top 3 priority open gaps
+    # Per-measure attempt summary (24) — top 3 priority open gaps × 8 features each
     for i in range(3):
         names.extend([
-            f"priority_gap_{i}_measure_idx",    # Measure index / 18
-            f"priority_gap_{i}_attempt_count",  # Attempts / 10
-            f"priority_gap_{i}_best_channel",   # Best-performing channel index / 5
-            f"priority_gap_{i}_days_since",     # Days since last attempt / 90
+            f"priority_gap_{i}_weight_norm",        # CMS weight (1 or 3) / 3
+            f"priority_gap_{i}_attempt_count",      # Attempts / 10
+            f"priority_gap_{i}_days_since",         # Days since last attempt / 90
+            f"priority_gap_{i}_best_ch_sms",        # 1.0 if best channel is SMS
+            f"priority_gap_{i}_best_ch_email",      # 1.0 if best channel is email
+            f"priority_gap_{i}_best_ch_portal",     # 1.0 if best channel is portal
+            f"priority_gap_{i}_best_ch_app",        # 1.0 if best channel is app
+            f"priority_gap_{i}_best_ch_ivr",        # 1.0 if best channel is IVR
         ])
 
     assert len(names) == TIER3_END, f"Tier 3 expected {TIER3_END} features, got {len(names)}"
@@ -213,7 +227,8 @@ def snapshot_to_vector(
     patient_avg_gap_age: float = 0.0,
     num_pending_actions: int = 0,
     num_in_flight_measures: int = 0,
-    action_history: List[int] = None,
+    channel_affinity_counts: Dict[str, int] = None,
+    channel_affinity_recency: Dict[str, int] = None,
     gap_attempt_info: Dict[str, Dict] = None,
     measure_attempt_summary: List[Dict] = None,
 ) -> np.ndarray:
@@ -454,22 +469,23 @@ def snapshot_to_vector(
     vec[idx] = min(num_in_flight_measures / len(HEDIS_MEASURES), 1.0); idx += 1
     vec[idx] = 1.0 if num_pending_actions > 0 else 0.0; idx += 1
 
-    # Action history (10) — last 5 actions as (measure_norm, channel_norm)
-    if action_history is None:
-        action_history = []
-    from config import ACTION_BY_ID
-    for i in range(5):
-        if i < len(action_history):
-            act = ACTION_BY_ID.get(action_history[i])
-            if act and act.measure != "NO_ACTION":
-                vec[idx] = MEASURE_TO_IDX.get(act.measure, 0) / len(HEDIS_MEASURES); idx += 1
-                vec[idx] = CHANNEL_TO_IDX.get(act.channel, 0) / 5.0; idx += 1
-            else:
-                vec[idx] = 0.0; idx += 1
-                vec[idx] = 0.0; idx += 1
-        else:
-            vec[idx] = 0.0; idx += 1
-            vec[idx] = 0.0; idx += 1
+    # Channel affinity (10) — lifetime usage volume + recency per channel
+    # Volume: how many times each channel has been used for this patient
+    # Recency: how many days since last use of each channel
+    # Combined with per-channel success rates (indices 114-118), this gives
+    # the model a complete channel affinity profile: volume + recency + effectiveness
+    ch_counts = channel_affinity_counts or {}
+    ch_recency = channel_affinity_recency or {}
+    vec[idx] = min(ch_counts.get("sms", 0), 10) / 10.0; idx += 1
+    vec[idx] = min(ch_counts.get("email", 0), 10) / 10.0; idx += 1
+    vec[idx] = min(ch_counts.get("portal", 0), 10) / 10.0; idx += 1
+    vec[idx] = min(ch_counts.get("app", 0), 10) / 10.0; idx += 1
+    vec[idx] = min(ch_counts.get("ivr", 0), 10) / 10.0; idx += 1
+    vec[idx] = min(ch_recency.get("sms", 90), 90) / 90.0; idx += 1
+    vec[idx] = min(ch_recency.get("email", 90), 90) / 90.0; idx += 1
+    vec[idx] = min(ch_recency.get("portal", 90), 90) / 90.0; idx += 1
+    vec[idx] = min(ch_recency.get("app", 90), 90) / 90.0; idx += 1
+    vec[idx] = min(ch_recency.get("ivr", 90), 90) / 90.0; idx += 1
 
     # Gap-specific detail (10) — top 5 open gaps
     if gap_attempt_info is None:
@@ -484,21 +500,25 @@ def snapshot_to_vector(
             vec[idx] = 0.0; idx += 1
             vec[idx] = 0.0; idx += 1
 
-    # Per-measure attempt summary (12) — top 3 priority open gaps
+    # Per-measure attempt summary (24) — top 3 priority open gaps × 8 features each
+    # No index encoding: weight is meaningful ordinal, channel is one-hot
     if measure_attempt_summary is None:
         measure_attempt_summary = []
     for i in range(3):
         if i < len(measure_attempt_summary):
             ms = measure_attempt_summary[i]
-            vec[idx] = MEASURE_TO_IDX.get(ms.get("measure", ""), 0) / len(HEDIS_MEASURES); idx += 1
+            best_ch = ms.get("best_channel", "")
+            vec[idx] = MEASURE_WEIGHTS.get(ms.get("measure", ""), 1) / 3.0; idx += 1
             vec[idx] = min(ms.get("attempts", 0), 10) / 10.0; idx += 1
-            vec[idx] = CHANNEL_TO_IDX.get(ms.get("best_channel", "none"), 0) / 5.0; idx += 1
             vec[idx] = min(ms.get("days_since", 90), 90) / 90.0; idx += 1
+            vec[idx] = 1.0 if best_ch == "sms" else 0.0; idx += 1
+            vec[idx] = 1.0 if best_ch == "email" else 0.0; idx += 1
+            vec[idx] = 1.0 if best_ch == "portal" else 0.0; idx += 1
+            vec[idx] = 1.0 if best_ch == "app" else 0.0; idx += 1
+            vec[idx] = 1.0 if best_ch == "ivr" else 0.0; idx += 1
         else:
-            vec[idx] = 0.0; idx += 1
-            vec[idx] = 0.0; idx += 1
-            vec[idx] = 0.0; idx += 1
-            vec[idx] = 0.0; idx += 1
+            for _ in range(8):
+                vec[idx] = 0.0; idx += 1
 
     assert idx == TIER3_END, f"Tier 3 wrote {idx} features, expected {TIER3_END}"
 
