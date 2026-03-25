@@ -131,24 +131,33 @@ def run_nightly_cycle(
     rng = np.random.default_rng(day)
 
     # --- Build training batch from 3 tiers of experience ---
-    # In production, all of this is one experience store. The tiers are:
-    #   1. TODAY — full batch, freshest signal
-    #   2. RECENT (last 14 days) — has retroactively updated closure rewards
-    #   3. HISTORICAL — sample from older data to prevent catastrophic forgetting
+    #   1. TODAY — ALL experiences (freshest signal, highest priority)
+    #   2. RECENT SIM DAYS — SAMPLE from previous simulation days
+    #   3. HISTORICAL — SAMPLE from pre-simulation offline data
+    from config import (
+        NIGHTLY_RECENT_DAYS_LOOKBACK, NIGHTLY_RECENT_SAMPLE_FRAC,
+        NIGHTLY_HISTORICAL_REPLAY_FRAC, NIGHTLY_WORLD_MODEL_MAX_EPISODES,
+    )
 
-    # Tier 1: Today's experiences (all of them)
+    # Tier 1: Today's experiences (ALL of them — freshest signal)
     today_experiences = _load_today_experiences(day)
     today_episodes = _experiences_to_episodes(today_experiences, rng)
 
-    # Tier 2: Recent simulation experiences (last 14 days, all of them)
+    # Tier 2: Previous sim days (SAMPLE — keeps batch size stable as sim progresses)
     recent_experiences = []
-    for recent_day in range(max(1, day - 14), day):
-        recent_experiences.extend(_load_today_experiences(recent_day))
+    for recent_day in range(max(1, day - NIGHTLY_RECENT_DAYS_LOOKBACK), day):
+        day_exps = _load_today_experiences(recent_day)
+        # Sample a fraction from each prior day
+        n_sample = max(1, int(len(day_exps) * NIGHTLY_RECENT_SAMPLE_FRAC))
+        if len(day_exps) > n_sample:
+            indices = rng.choice(len(day_exps), size=n_sample, replace=False)
+            day_exps = [day_exps[i] for i in indices]
+        recent_experiences.extend(day_exps)
     recent_episodes = _experiences_to_episodes(recent_experiences, rng)
 
-    # Tier 3: Historical sample (50% of pre-simulation data)
+    # Tier 3: Historical offline data (SAMPLE — prevents catastrophic forgetting)
     historical = _get_historical_episodes()
-    n_replay = max(1, int(len(historical) * history_replay_frac))
+    n_replay = max(1, int(len(historical) * NIGHTLY_HISTORICAL_REPLAY_FRAC))
     replay_indices = rng.choice(len(historical), size=min(n_replay, len(historical)), replace=False)
     replay_episodes = [historical[i] for i in replay_indices]
 
@@ -158,7 +167,8 @@ def run_nightly_cycle(
 
     if verbose:
         print(f"    Training batch: {len(today_episodes)} today + "
-              f"{len(recent_episodes)} recent + {len(replay_episodes)} replay "
+              f"{len(recent_episodes)} recent ({NIGHTLY_RECENT_SAMPLE_FRAC:.0%} of {NIGHTLY_RECENT_DAYS_LOOKBACK}d) + "
+              f"{len(replay_episodes)} replay ({NIGHTLY_HISTORICAL_REPLAY_FRAC:.0%} hist) "
               f"= {total_transitions} transitions", flush=True)
 
     # --- 4. Online update of world models (dynamics + reward) ---
@@ -173,8 +183,13 @@ def run_nightly_cycle(
             from config import DYNAMICS_MODEL_CONFIG, REWARD_MODEL_CONFIG
             dynamics_model.train()
             opt_d = torch.optim.Adam(dynamics_model.parameters(), lr=DYNAMICS_MODEL_CONFIG["lr"])
-            # Train on ALL episodes (same batch as CQL)
-            for ep in training_episodes:
+            # Sample episodes for world model update (capped via config)
+            if len(training_episodes) > NIGHTLY_WORLD_MODEL_MAX_EPISODES:
+                wm_indices = rng.choice(len(training_episodes), size=NIGHTLY_WORLD_MODEL_MAX_EPISODES, replace=False)
+                world_model_eps = [training_episodes[i] for i in wm_indices]
+            else:
+                world_model_eps = training_episodes
+            for ep in world_model_eps:
                 if len(ep["obs"]) < 2:
                     continue
                 states = torch.FloatTensor(ep["obs"][:-1])
@@ -189,8 +204,8 @@ def run_nightly_cycle(
         if reward_model is not None and total_transitions > 10:
             reward_model.train()
             opt_r = torch.optim.Adam(reward_model.parameters(), lr=REWARD_MODEL_CONFIG["lr"])
-            # Train on ALL episodes (same batch as CQL)
-            for ep in training_episodes:
+            # Train on same capped sample as dynamics model
+            for ep in world_model_eps:
                 if len(ep["obs"]) < 2:
                     continue
                 states = torch.FloatTensor(ep["obs"])

@@ -353,6 +353,31 @@ OUTREACH_LIFT: Dict[str, float] = {
 # ---------------------------------------------------------------------------
 # Gap closure probability factors (per-interaction dynamics)
 # ---------------------------------------------------------------------------
+# Organic (no-action) daily closure probability per measure
+# These represent gaps closing without outreach: patient sees doctor independently,
+# fills Rx at pharmacy, gets vaccine on their own, etc.
+# Must be MUCH lower than action-driven rates so the model learns incremental lift.
+ORGANIC_CLOSURE_DAILY_RATE: Dict[str, float] = {
+    "COL": 0.001,   # ~3% over 30 days — low, colonoscopy rarely happens spontaneously
+    "BCS": 0.002,   # ~6% over 30 days — some women schedule mammograms on their own
+    "EED": 0.001,   # ~3% — eye exams rarely self-initiated by diabetics
+    "FVA": 0.002,   # ~6% — some get Tdap at routine visits
+    "FVO": 0.002,   # ~6% — pneumococcal offered at routine visits
+    "AIS": 0.001,   # ~3% — Shingrix less commonly self-initiated
+    "FLU": 0.005,   # ~14% — flu shots highly visible at pharmacies in season
+    "CBP": 0.003,   # ~9% — BP checked at any doctor visit
+    "BPD": 0.002,   # ~6% — requires diabetes + hypertension visit
+    "HBD": 0.002,   # ~6% — A1C drawn at routine diabetes visits
+    "KED": 0.001,   # ~3% — kidney labs rarely ordered without prompting
+    "MAC": 0.004,   # ~11% — statin refills happen at pharmacy
+    "MRA": 0.004,   # ~11% — ACE/ARB refills happen at pharmacy
+    "MDS": 0.003,   # ~9% — diabetes statin refills
+    "DSF": 0.001,   # ~3% — depression follow-up rarely self-initiated
+    "DRR": 0.0005,  # ~1.5% — remission is hard without intervention
+    "DMC02": 0.003, # ~9% — antidepressant refills at pharmacy
+    "TRC_M": 0.002, # ~6% — some patients schedule post-discharge follow-up
+}
+
 CLOSURE_BASE_MULTIPLIER = 0.30        # base_rate * this * archetype factors = per-interaction closure prob
 CLOSURE_BEST_CHANNEL_FACTOR = 2.5     # Multiplied when using best channel for measure
 CLOSURE_CLICKED_FACTOR = 3.0          # Multiplied if patient clicked
@@ -421,6 +446,7 @@ DYNAMICS_MODEL_CONFIG = {
     "lr": 1e-3,
     "epochs": 3,
     "batch_size": 1024,
+    "nightly_max_episodes": 2000,   # Cap episodes per nightly world model update
 }
 
 REWARD_MODEL_CONFIG = {
@@ -429,7 +455,16 @@ REWARD_MODEL_CONFIG = {
     "lr": 1e-3,
     "epochs": 3,
     "batch_size": 1024,
+    "nightly_max_episodes": 2000,   # Cap episodes per nightly reward model update
 }
+
+# ---------------------------------------------------------------------------
+# Nightly Training Mix — controls the 3-tier training batch composition
+# ---------------------------------------------------------------------------
+NIGHTLY_RECENT_DAYS_LOOKBACK = 14      # How many prior sim days to sample from
+NIGHTLY_RECENT_SAMPLE_FRAC = 0.20      # Fraction of prior sim day experiences to sample (20%)
+NIGHTLY_HISTORICAL_REPLAY_FRAC = 0.05  # Fraction of historical episodes to replay (5%)
+NIGHTLY_WORLD_MODEL_MAX_EPISODES = 2000  # Max episodes for dynamics/reward model updates per night
 
 # ---------------------------------------------------------------------------
 # STARS Target

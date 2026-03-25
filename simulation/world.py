@@ -329,6 +329,23 @@ class WorldSimulator:
     # -------------------------------------------------------------------------
     def advance_day(self) -> Dict[str, Any]:
         """End-of-day processing. Returns daily summary."""
+        # Organic gap closures — gaps that close WITHOUT outreach
+        # (patient visits doctor independently, fills Rx, gets vaccine, etc.)
+        from config import ORGANIC_CLOSURE_DAILY_RATE
+        organic_closures = {}
+        for pid, ps in self.patients.items():
+            for m in list(ps.snapshot.get("open_gaps", [])):
+                if m in getattr(ps, 'closed_measures', set()):
+                    continue  # Already closed
+                daily_prob = ORGANIC_CLOSURE_DAILY_RATE.get(m, 0.001)
+                # Modulate by patient responsiveness (more engaged patients close more organically)
+                responsiveness = ps.snapshot.get("overall_responsiveness", 0.5)
+                adjusted_prob = daily_prob * (0.5 + responsiveness)
+                if self.rng.random() < adjusted_prob:
+                    ps.closed_measures.add(m)
+                    ps.last_closure_day = self.day
+                    organic_closures[m] = organic_closures.get(m, 0) + 1
+
         # Advance all pending state machine actions one step
         transitions = self.state_machine.advance_all(self.day)
 
@@ -374,10 +391,15 @@ class WorldSimulator:
             for m in ps.snapshot.get("open_gaps", []):
                 total_patients[m] += 1
 
+        # Merge organic closures into daily gap closures
+        for m, count in organic_closures.items():
+            self.daily_gap_closures[m] = self.daily_gap_closures.get(m, 0) + count
+
         summary = {
             "day": self.day,
             "daily_actions": self.daily_actions_taken,
             "gap_closures": dict(self.daily_gap_closures),
+            "organic_closures": organic_closures,
             "closure_reward": closure_reward,
             "reward_updates": reward_updates,
             "total_patients": total_patients,

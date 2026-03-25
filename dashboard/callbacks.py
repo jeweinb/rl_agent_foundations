@@ -195,13 +195,16 @@ def register_callbacks(app):
         else:
             cum = _empty_fig("Cumulative Reward — waiting for data...")
 
-        # Regret Curve — fixed oracle baseline for consistent measurement
-        # As model improves, daily reward approaches oracle → regret flattens
+        # Regret Curve — oracle is the best daily reward achieved so far
+        # Regret = gap between best-possible and actual. Should flatten as model improves.
         if metrics and len(metrics) > 1:
             reg = go.Figure()
-            # Fixed oracle: use a reasonable upper bound on daily reward
-            # This avoids the misleading "running best" that makes regret always climb
-            oracle_reward = 5.0
+            daily_rewards = [m["daily_reward"] for m in metrics]
+            # Oracle = 90th percentile of observed daily rewards (achievable upper bound)
+            # This adapts to the actual reward scale and avoids the "running max" problem
+            # by using a stable percentile rather than a single lucky day
+            import numpy as np
+            oracle_reward = float(np.percentile(daily_rewards, 90)) if len(daily_rewards) >= 5 else max(daily_rewards)
             regret = []
             cum_regret = 0.0
             for m in metrics:
