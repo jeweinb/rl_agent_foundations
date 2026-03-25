@@ -166,6 +166,24 @@ def generate_state_features(
                 params["min"], params["max"]
             ))
 
+        # Measure-relevant clinical indicators
+        # These help the model understand per-measure patient context
+        measure_clinical = {
+            # Screening history
+            "prior_colonoscopy": float(rng.random() < (0.6 if patient["age"] >= 50 else 0.1)),
+            "prior_mammogram": float(rng.random() < (0.7 if patient["sex"] == "F" and patient["age"] >= 40 else 0.0)),
+            "years_since_eye_exam": float(rng.choice([0, 1, 2, 3, 4, 5], p=[0.3, 0.25, 0.2, 0.1, 0.1, 0.05])),
+            # Vaccine history
+            "prior_flu_vaccine": float(rng.random() < (0.55 if patient["age"] >= 65 else 0.35)),
+            "prior_pneumo_vaccine": float(rng.random() < (0.4 if patient["age"] >= 65 else 0.1)),
+            # Immune/hospital status
+            "immunocompromised": float(rng.random() < 0.08),
+            "recent_discharge": float(rng.random() < 0.15),
+            # PCP / follow-up
+            "has_pcp": float(rng.random() < 0.85),
+            "prior_mh_followup": float(rng.random() < (0.5 if conditions.get("depression") else 0.05)),
+        }
+
         snapshot = {
             "patient_id": pid,
             "snapshot_date": snapshot_date,
@@ -196,6 +214,7 @@ def generate_state_features(
             "closed_gaps": closed_gaps,
             "engagement": engagement,
             "risk_scores": risk_scores,
+            "measure_clinical": measure_clinical,
         }
         snapshots.append(snapshot)
 

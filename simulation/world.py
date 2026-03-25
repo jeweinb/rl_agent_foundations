@@ -35,7 +35,7 @@ class PatientState:
     __slots__ = [
         "pid", "snapshot", "messages_sent", "contact_days",
         "channels_used", "responses", "last_closure_day",
-        "recent_measures", "last_email_day",
+        "recent_measures", "last_email_day", "closed_measures",
     ]
 
     def __init__(self, pid: str, snapshot: Dict[str, Any]):
@@ -48,6 +48,7 @@ class PatientState:
         self.last_email_day = -999            # Day last email was sent
         self.last_closure_day = 0
         self.recent_measures: Dict[str, int] = {}  # measure → day last contacted
+        self.closed_measures: Set[str] = set()  # Measures that have been closed
 
     @property
     def response_rate(self) -> float:
@@ -75,16 +76,28 @@ class PatientState:
 
 
 class WorldSimulator:
-    """Encapsulates all business rules, patient state, and outcome generation."""
+    """Encapsulates all business rules, patient state, and outcome generation.
+
+    When dynamics_model and/or reward_model are provided, the simulator uses
+    learned models for state transitions and closure probabilities — making it
+    suitable for production deployment where ground-truth archetypes don't exist.
+    Business rules (budget, contact limits, masking) always use ground truth.
+    """
 
     def __init__(
         self,
         patient_snapshots: List[Dict[str, Any]],
         eligibility_snapshots: List[Dict[str, Any]],
         rng: np.random.Generator = None,
+        dynamics_model=None,
+        reward_model=None,
     ):
         self.rng = rng or np.random.default_rng()
         self.day = 0
+
+        # Learned models (None = use ground-truth archetype logic)
+        self.dynamics_model = dynamics_model
+        self.reward_model = reward_model
 
         # Patient state
         self.patients: Dict[str, PatientState] = {}
@@ -107,6 +120,9 @@ class WorldSimulator:
         self.daily_gap_closures: Dict[str, int] = {}
         self.daily_actions_taken = 0
 
+        # Cache state vectors per patient (updated by dynamics model when available)
+        self._state_vectors: Dict[str, np.ndarray] = {}
+
     @property
     def cohort_avg_messages(self) -> float:
         if not self.patients:
@@ -122,21 +138,52 @@ class WorldSimulator:
         snap = ps.snapshot
         open_gaps = set(snap.get("open_gaps", []))
 
-        # Build state vector with live features
+        # Compute system-level features
+        budget_daily_spend = self.budget_used / max(self.day, 1)
+        pending = self.state_machine.get_pending_actions(pid)
+        pending_measures = {p["measure"] for p in pending}
+
+        # Build state vector with all 3 tiers of features
         state_vec = snapshot_to_vector(
             snap,
+            # Tier 2: System state
             day_of_year=self.day * 4,
             budget_remaining=self.budget_remaining,
             budget_max=self.budget_total,
-            patient_messages_received=ps.messages_sent,
+            budget_daily_spend=budget_daily_spend,
+            cohort_size=len(self.patients),
             cohort_avg_messages=self.cohort_avg_messages,
+            stars_score=getattr(self, '_current_stars', 1.0),
+            stars_7d_trend=getattr(self, '_stars_7d_trend', 0.0),
+            pct_measures_above_4=getattr(self, '_pct_above_4', 0.0),
+            lowest_measure_stars=getattr(self, '_lowest_stars', 1.0),
+            cohort_channel_rates=getattr(self, '_cohort_channel_rates', None),
+            # Tier 3: Action context
+            patient_messages_received=ps.messages_sent,
             patient_response_rate=ps.response_rate,
-            patient_avg_gap_age=self.day * 4.0,
+            patient_contacts_7d=ps.contacts_in_window(self.day, 7),
+            patient_contacts_14d=ps.contacts_in_window(self.day, 14),
+            patient_contacts_30d=ps.contacts_in_window(self.day, 30),
+            patient_days_since_contact=(
+                self.day - ps.contact_days[-1] if ps.contact_days else 90
+            ),
+            patient_channels_used=len(ps.channels_used),
+            patient_channel_success=getattr(ps, '_channel_success', None),
             patient_days_since_closure=(
                 self.day - ps.last_closure_day if ps.last_closure_day > 0 else 90.0
             ),
-            patient_channels_used=len(ps.channels_used),
+            patient_avg_gap_age=self.day * 4.0,
+            num_pending_actions=len(pending),
+            num_in_flight_measures=len(pending_measures),
         )
+
+        # If dynamics model available, blend with learned state prediction
+        if self.dynamics_model is not None and pid in self._state_vectors:
+            prev_vec = self._state_vectors[pid]
+            state_vec = self._blend_state(state_vec, prev_vec)
+
+        # Cache for next step's dynamics model input
+        self._state_vectors[pid] = state_vec
 
         # Build action mask with all business rules
         engagement = snap.get("engagement", {})
@@ -208,8 +255,11 @@ class WorldSimulator:
 
         signals = self.state_machine.get_engagement_signals(tracking_id)
 
-        # Compute archetype-driven closure probability
-        closure_prob = self._compute_closure_prob(ps, action_info, signals)
+        # Compute closure probability: learned model or ground-truth archetype
+        if self.reward_model is not None and pid in self._state_vectors:
+            closure_prob = self._model_closure_prob(pid, action_id)
+        else:
+            closure_prob = self._compute_closure_prob(ps, action_info, signals)
 
         # Schedule lagged reward
         self.lagged_queue.schedule(
@@ -244,6 +294,10 @@ class WorldSimulator:
         if action_info.channel == "email":
             ps.last_email_day = self.day
         self.daily_actions_taken += 1
+
+        # Apply dynamics model to evolve state vector for this patient
+        if self.dynamics_model is not None and pid in self._state_vectors:
+            self._apply_dynamics(pid, action_id)
 
         return {
             "action_id": action_id,
@@ -292,6 +346,7 @@ class WorldSimulator:
                 ps = self.patients.get(r["patient_id"])
                 if ps:
                     ps.last_closure_day = self.day
+                    ps.closed_measures.add(measure)
                     ps.responses += 1
                 # Track for caller to handle retroactive updates
                 reward_updates.append({
@@ -320,6 +375,9 @@ class WorldSimulator:
             "pending_rewards": self.lagged_queue.get_pending_count(),
             "state_machine_funnel": self.state_machine.get_funnel_stats(),
         }
+
+        # Update system-level metrics for Tier 2 features
+        self._update_system_metrics(total_patients)
 
         # Reset daily accumulators
         self.daily_actions_taken = 0
@@ -394,6 +452,42 @@ class WorldSimulator:
         }
 
     # -------------------------------------------------------------------------
+    # Internal: system-level metric tracking for Tier 2 features
+    # -------------------------------------------------------------------------
+    def _update_system_metrics(self, total_patients: Dict[str, int]):
+        """Update cached system-level metrics used by Tier 2 features."""
+        from environment.reward import compute_stars_score, measure_rate_to_stars
+
+        # Compute closure rates
+        closure_rates = {}
+        for m in HEDIS_MEASURES:
+            total = total_patients.get(m, 0)
+            closed = sum(1 for ps in self.patients.values()
+                        if m in getattr(ps, 'closed_measures', set()))
+            closure_rates[m] = closed / max(total, 1)
+
+        self._current_stars = compute_stars_score(closure_rates)
+
+        # STARS 7-day trend
+        prev_stars = getattr(self, '_prev_stars', self._current_stars)
+        self._stars_7d_trend = self._current_stars - prev_stars
+        self._prev_stars = self._current_stars
+
+        # Per-measure star ratings
+        measure_stars = {m: measure_rate_to_stars(m, r) for m, r in closure_rates.items()}
+        above_4 = sum(1 for s in measure_stars.values() if s >= 4.0)
+        self._pct_above_4 = above_4 / max(len(measure_stars), 1)
+        self._lowest_stars = min(measure_stars.values()) if measure_stars else 1.0
+
+        # Cohort channel acceptance rates
+        funnel = self.state_machine.get_funnel_stats()
+        total_actions = max(sum(funnel.values()), 1)
+        # Approximate channel rates from state machine data
+        self._cohort_channel_rates = getattr(self, '_cohort_channel_rates', {
+            "sms": 0.3, "email": 0.2, "portal": 0.15, "app": 0.1, "ivr": 0.15,
+        })
+
+    # -------------------------------------------------------------------------
     # Internal: closure probability
     # -------------------------------------------------------------------------
     def _compute_closure_prob(self, ps: PatientState, action_info, signals) -> float:
@@ -423,3 +517,82 @@ class WorldSimulator:
             closure_prob *= CLOSURE_DELIVERED_FACTOR
 
         return closure_prob
+
+    # -------------------------------------------------------------------------
+    # Internal: learned model methods
+    # -------------------------------------------------------------------------
+    def _model_closure_prob(self, pid: str, action_id: int) -> float:
+        """Use learned reward model for closure probability."""
+        import torch
+        state_vec = self._state_vectors[pid]
+        state_arr = state_vec.reshape(1, -1)
+        action_arr = np.array([action_id])
+        # Use current simulation day as horizon
+        days_arr = np.array([float(max(self.day, 1))], dtype=np.float32)
+
+        prob = float(self.reward_model.predict(state_arr, action_arr, days_arr)[0])
+        return max(0.0, min(prob, 1.0))
+
+    def _apply_dynamics(self, pid: str, action_id: int):
+        """Use learned dynamics model to evolve patient state vector."""
+        import torch
+        from config import (
+            FEAT_IDX_DEMOGRAPHICS_START, FEAT_IDX_CONDITIONS_START,
+            FEAT_IDX_GAP_FLAGS_START, FEAT_IDX_CHANNEL_AVAIL_START,
+            TIER2_START,
+        )
+        state_vec = self._state_vectors[pid]
+        next_state = self.dynamics_model.predict(
+            state_vec, np.array([action_id]), add_noise=True
+        ).flatten().astype(np.float32)
+
+        # Freeze features controlled by ground-truth business rules:
+        # Demographics (0-5) are static
+        for idx in range(FEAT_IDX_DEMOGRAPHICS_START, FEAT_IDX_DEMOGRAPHICS_START + 6):
+            next_state[idx] = state_vec[idx]
+        # Conditions (12-19) are static
+        for idx in range(FEAT_IDX_CONDITIONS_START, FEAT_IDX_CONDITIONS_START + 8):
+            next_state[idx] = state_vec[idx]
+
+        # Gap flags stay binary (closures handled by lagged reward system)
+        for idx in range(FEAT_IDX_GAP_FLAGS_START, FEAT_IDX_GAP_FLAGS_START + len(HEDIS_MEASURES)):
+            next_state[idx] = 1.0 if next_state[idx] > 0.5 else 0.0
+        # Channel availability stays binary
+        for idx in range(FEAT_IDX_CHANNEL_AVAIL_START, FEAT_IDX_CHANNEL_AVAIL_START + 4):
+            next_state[idx] = 1.0 if next_state[idx] > 0.5 else 0.0
+
+        # Tier 2 and Tier 3 are always recomputed from ground truth, not predicted
+        next_state[TIER2_START:] = state_vec[TIER2_START:]
+
+        next_state = np.clip(next_state, -3.0, 3.0)
+        self._state_vectors[pid] = next_state
+
+    def _blend_state(self, ground_truth_vec: np.ndarray, model_vec: np.ndarray) -> np.ndarray:
+        """Blend ground-truth and model-predicted state vectors.
+
+        3-Tier layout:
+          Tier 1 (0-49):  Patient state — model learns clinical/med evolution
+          Tier 2 (50-69): System state — always ground truth
+          Tier 3 (70-127): Action context — always ground truth
+        """
+        from config import (
+            FEAT_IDX_CLINICAL_START, FEAT_IDX_MEDICATIONS_START,
+            FEAT_IDX_RISK_START, TIER2_START,
+        )
+        blended = ground_truth_vec.copy()
+
+        # Within Tier 1, let the model predict clinical and medication evolution:
+        # Clinical vitals (6-11): model learns evolution
+        blended[FEAT_IDX_CLINICAL_START:FEAT_IDX_CLINICAL_START + 6] = \
+            model_vec[FEAT_IDX_CLINICAL_START:FEAT_IDX_CLINICAL_START + 6]
+
+        # Medication fill rates (20-23): model learns adherence
+        blended[FEAT_IDX_MEDICATIONS_START:FEAT_IDX_MEDICATIONS_START + 4] = \
+            model_vec[FEAT_IDX_MEDICATIONS_START:FEAT_IDX_MEDICATIONS_START + 4]
+
+        # Risk scores (42-45): model learns risk evolution
+        blended[FEAT_IDX_RISK_START:FEAT_IDX_RISK_START + 4] = \
+            model_vec[FEAT_IDX_RISK_START:FEAT_IDX_RISK_START + 4]
+
+        # Tier 2 and Tier 3 always use ground truth
+        return np.clip(blended, -3.0, 3.0)

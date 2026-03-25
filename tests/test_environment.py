@@ -114,8 +114,8 @@ class TestStateSpace:
         vec1 = snapshot_to_vector(small_snapshots[0], day_of_year=1)
         vec2 = snapshot_to_vector(small_snapshots[0], day_of_year=180)
         # Temporal features should differ
-        # demographics(6)+clinical(6)+conditions(8)+meds(4)+gaps(18)+engagement(11)+risk(4)+budget(4)=61
-        temporal_idx = 61
+        # demographics(6)+clinical(6)+conditions(8)+meds(4)+gaps(18)+engagement(11)+risk(4)+budget(10)=67
+        temporal_idx = 67
         assert vec1[temporal_idx] != vec2[temporal_idx]
 
 
@@ -232,26 +232,23 @@ class TestReward:
         r_triple = compute_reward(measure="MAC", gap_closed=True, delivered=True)
         assert r_triple > r_single
 
-    def test_action_cost_negative(self):
+    def test_no_action_no_click_zero_reward(self):
         r = compute_reward(measure="COL", delivered=False)
-        assert r < 0.0  # Only action cost, no engagement
+        assert r == 0.0  # No gap closure, no click = zero reward
 
-    def test_engagement_increments(self):
-        r_none = compute_reward(measure="COL")
-        r_deliver = compute_reward(measure="COL", delivered=True)
+    def test_click_engagement_bonus(self):
+        r_no_click = compute_reward(measure="COL", delivered=True)
         r_click = compute_reward(measure="COL", delivered=True, clicked=True)
-        assert r_deliver > r_none
-        assert r_click > r_deliver
+        assert r_click > r_no_click
 
-    def test_fatigue_penalty(self):
-        r_normal = compute_reward(measure="COL", delivered=True, contacts_this_week=0)
-        r_fatigued = compute_reward(measure="COL", delivered=True, contacts_this_week=3)
-        assert r_fatigued < r_normal
+    def test_gap_closure_dominates_click(self):
+        r_click_only = compute_reward(measure="COL", clicked=True)
+        r_closure = compute_reward(measure="COL", gap_closed=True)
+        assert r_closure > r_click_only
 
-    def test_same_measure_penalty(self):
-        r_normal = compute_reward(measure="COL", delivered=True, days_since_same_measure=30)
-        r_recent = compute_reward(measure="COL", delivered=True, days_since_same_measure=3)
-        assert r_recent < r_normal
+    def test_no_action_is_zero(self):
+        r = compute_reward(measure=None, is_no_action=True)
+        assert r == 0.0
 
     def test_stars_score_range(self):
         rates = {m: 0.5 for m in HEDIS_MEASURES}

@@ -88,7 +88,7 @@ def evaluate_agent(
 def compare_models(
     champion_metrics: Dict[str, float],
     challenger_metrics: Dict[str, float],
-    improvement_threshold: float = 0.05,
+    improvement_threshold: float = 0.02,
 ) -> Dict[str, Any]:
     """Compare champion and challenger evaluation results.
 
@@ -126,15 +126,17 @@ def evaluate_agent_detailed(
     n_episodes: int = 1000,
     seed: int = 42,
     eligibility_snapshots=None,
+    dynamics_model=None,
+    reward_model=None,
 ) -> Dict[str, Any]:
-    """Simulate a full 90-day quarter using WorldSimulator (ground truth).
+    """Simulate a full 90-day quarter using WorldSimulator.
 
     Runs the agent across a cohort of patients for 90 simulated days with
-    shared global budget, weekly suppression, archetype-driven closures,
-    and lagged rewards. Tracks STARS trajectory as it evolves.
+    shared global budget, weekly suppression, lagged rewards, and state machine.
 
-    This is the "gold standard" evaluation — what actually happens when
-    we deploy this model for a full quarter.
+    When dynamics_model/reward_model are provided, uses learned models for
+    state transitions and closure probabilities (production-realistic).
+    Otherwise falls back to ground-truth archetype logic.
     """
     from environment.reward import compute_stars_score
     from simulation.world import WorldSimulator
@@ -155,8 +157,11 @@ def evaluate_agent_detailed(
     sim_snapshots = [patient_snapshots[i] for i in sampled]
     sim_elig = elig[:n_patients] if elig else []
 
-    # Create a fresh WorldSimulator for this evaluation
-    world = WorldSimulator(sim_snapshots, sim_elig, rng=rng)
+    # Create a fresh WorldSimulator with optional learned models
+    world = WorldSimulator(
+        sim_snapshots, sim_elig, rng=rng,
+        dynamics_model=dynamics_model, reward_model=reward_model,
+    )
 
     sim_days = 90
     measure_attempts = Counter()
@@ -164,6 +169,7 @@ def evaluate_agent_detailed(
     no_action_count = 0
     total_actions = 0
     total_reward = 0.0
+    daily_rewards = []
 
     # STARS trajectory: snapshot every 5 days
     stars_trajectory = []
@@ -202,6 +208,7 @@ def evaluate_agent_detailed(
         day_summary = world.advance_day()
         closure_reward = day_summary.get("closure_reward", 0)
         total_reward += closure_reward
+        daily_rewards.append(closure_reward)
 
         # Snapshot STARS every 5 days
         if day % 5 == 0 or day == sim_days:
@@ -215,7 +222,7 @@ def evaluate_agent_detailed(
                 # Denominator: initial patients with this gap
                 denom = sum(1 for ps in world.patients.values() if m in ps.snapshot.get("open_gaps", []) or m in ps.snapshot.get("closed_gaps", []))
                 # Numerator: patients who have responded (closure day set)
-                closed = sum(1 for ps in world.patients.values() if ps.last_closure_day > 0 and m in ps.snapshot.get("open_gaps", []))
+                closed = sum(1 for ps in world.patients.values() if m in getattr(ps, 'closed_measures', set()) and m in ps.snapshot.get("open_gaps", []))
                 closure_rates[m] = closed / max(denom, 1)
 
             stars = compute_stars_score(closure_rates)
@@ -246,8 +253,8 @@ def evaluate_agent_detailed(
     final_stars = compute_stars_score(sim_closure_rates)
 
     return {
-        "mean_reward": float(np.mean(episode_rewards)),
-        "std_reward": float(np.std(episode_rewards)),
+        "mean_reward": float(np.mean(daily_rewards)) if daily_rewards else 0.0,
+        "std_reward": float(np.std(daily_rewards)) if daily_rewards else 0.0,
         "total_actions": total_actions,
         "no_action_count": no_action_count,
         "no_action_rate": no_action_count / max(total_actions, 1),

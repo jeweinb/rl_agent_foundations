@@ -115,7 +115,8 @@ def build_offline_episodes(
             # Update state for next step
             if outcome.get("gap_closed_within_30d") and measure in HEDIS_MEASURES:
                 open_gaps.discard(measure)
-                gap_idx = 24 + HEDIS_MEASURES.index(measure)
+                from config import FEAT_IDX_GAP_FLAGS_START
+                gap_idx = FEAT_IDX_GAP_FLAGS_START + HEDIS_MEASURES.index(measure)
                 state_vec[gap_idx] = 0.0
 
             # Small state perturbation

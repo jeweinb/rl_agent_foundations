@@ -21,7 +21,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from config import (
     NUM_ACTIONS, STATE_DIM, HEDIS_MEASURES, MEASURE_WEIGHTS,
     MAX_CONTACTS_PER_WEEK, MIN_DAYS_BETWEEN_SAME_MEASURE,
-    FEAT_IDX_GAP_FLAGS_START, compute_global_budget,
+    FEAT_IDX_GAP_FLAGS_START, FEAT_IDX_CHANNEL_AVAIL_START,
+    FEAT_IDX_BUDGET_START,
+    compute_global_budget,
 )
 from environment.action_space import decode_action, is_no_action, get_action_info
 from environment.action_masking import compute_action_mask
@@ -189,12 +191,13 @@ class HEDISEnv(gym.Env):
             if self.reward_model is not None:
                 state_arr = self._state_vector.reshape(1, -1)
                 action_arr = np.array([action])
-                # Query at 90-day horizon (highest signal in training data, 21% positive rate)
+                # Query at current step count as horizon (matches training data distribution)
                 # Then convert to per-day probability for this single step
-                days_arr = np.array([90.0], dtype=np.float32)
-                closure_prob_90d = float(self.reward_model.predict(state_arr, action_arr, days_arr)[0])
-                # P(close today) = 1 - (1 - P(close in 90 days))^(1/90)
-                closure_prob = 1.0 - (1.0 - min(closure_prob_90d, 0.99)) ** (1.0 / 90.0)
+                horizon = max(float(self._step_count + 1), 1.0)
+                days_arr = np.array([horizon], dtype=np.float32)
+                closure_prob_horizon = float(self.reward_model.predict(state_arr, action_arr, days_arr)[0])
+                # P(close today) = 1 - (1 - P(close in horizon days))^(1/horizon)
+                closure_prob = 1.0 - (1.0 - min(closure_prob_horizon, 0.99)) ** (1.0 / horizon)
             else:
                 from config import GAP_CLOSURE_BASE_RATES
                 closure_prob = GAP_CLOSURE_BASE_RATES.get(measure, 0.5) * 0.02
@@ -275,7 +278,7 @@ class HEDISEnv(gym.Env):
         """
         sv = self._state_vector
 
-        # Read gap flags from predicted state (indices 24-41)
+        # Read gap flags from predicted state
         open_gaps = set()
         for i, m in enumerate(HEDIS_MEASURES):
             if sv[FEAT_IDX_GAP_FLAGS_START + i] > 0.5:
@@ -283,20 +286,17 @@ class HEDISEnv(gym.Env):
         # Keep in sync for termination check
         self._open_gaps = open_gaps
 
-        # Read channel availability from predicted state (indices 42-45)
-        # These are continuous predictions from the dynamics model.
-        # Threshold at 0.5 to convert to boolean.
+        # Read channel availability from predicted state
         channel_availability = {
-            "sms": sv[42] > 0.5,      # sms_consent
-            "email": sv[43] > 0.5,    # email_available
-            "portal": sv[44] > 0.5,   # portal_registered
-            "app": sv[45] > 0.5,      # app_installed
-            "ivr": True,              # IVR always available
+            "sms": sv[FEAT_IDX_CHANNEL_AVAIL_START] > 0.5,
+            "email": sv[FEAT_IDX_CHANNEL_AVAIL_START + 1] > 0.5,
+            "portal": sv[FEAT_IDX_CHANNEL_AVAIL_START + 2] > 0.5,
+            "app": sv[FEAT_IDX_CHANNEL_AVAIL_START + 3] > 0.5,
+            "ivr": True,
         }
 
-        # Read budget from predicted state (index 57)
-        # budget_remaining_norm is in [0,1] → scale back to actual count
-        predicted_budget_frac = sv[57]
+        # Read budget from predicted state (budget_remaining_norm)
+        predicted_budget_frac = sv[FEAT_IDX_BUDGET_START]
         budget_remaining = int(predicted_budget_frac * self._budget_max)
 
         return compute_action_mask(

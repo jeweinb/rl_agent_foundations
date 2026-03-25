@@ -19,6 +19,7 @@ from simulation.action_state_machine import (
 from simulation.lagged_rewards import LaggedRewardQueue
 from simulation.metrics import MetricsTracker
 from simulation.daily_cycle import run_daily_cycle
+from simulation.world import WorldSimulator
 from training.data_loader import build_offline_episodes
 from training.cql_trainer import ActorCriticCQL
 from environment.hedis_env import HEDISEnv
@@ -301,6 +302,9 @@ class TestMetricsTracker:
 # Daily Cycle
 # =========================================================================
 class TestDailyCycle:
+    def _make_world(self, small_snapshots, small_eligibility):
+        return WorldSimulator(small_snapshots, small_eligibility, rng=np.random.default_rng(42))
+
     def test_daily_cycle_runs(self, small_snapshots, small_eligibility, tmp_path):
         import config
         orig_dir = config.SIMULATION_DATA_DIR
@@ -309,14 +313,10 @@ class TestDailyCycle:
 
         try:
             agent = ActorCriticCQL()
-            sm = ActionLifecycleTracker(rng=np.random.default_rng(42))
-            lq = LaggedRewardQueue(rng=np.random.default_rng(42))
+            world = self._make_world(small_snapshots, small_eligibility)
 
             result = run_daily_cycle(
-                day=1, agent=agent,
-                patient_snapshots=small_snapshots,
-                eligibility_snapshots=small_eligibility,
-                state_machine=sm, lagged_queue=lq,
+                day=1, agent=agent, world=world,
                 rng=np.random.default_rng(42),
             )
 
@@ -338,15 +338,9 @@ class TestDailyCycle:
 
         try:
             agent = ActorCriticCQL()
-            sm = ActionLifecycleTracker(rng=np.random.default_rng(42))
-            lq = LaggedRewardQueue(rng=np.random.default_rng(42))
+            world = self._make_world(small_snapshots, small_eligibility)
 
-            run_daily_cycle(
-                day=1, agent=agent,
-                patient_snapshots=small_snapshots,
-                eligibility_snapshots=small_eligibility,
-                state_machine=sm, lagged_queue=lq,
-            )
+            run_daily_cycle(day=1, agent=agent, world=world)
 
             day_dir = os.path.join(config.SIMULATION_DATA_DIR, "day_01")
             assert os.path.exists(os.path.join(day_dir, "actions_taken.json"))
@@ -363,15 +357,9 @@ class TestDailyCycle:
 
         try:
             agent = ActorCriticCQL()
-            sm = ActionLifecycleTracker(rng=np.random.default_rng(42))
-            lq = LaggedRewardQueue(rng=np.random.default_rng(42))
+            world = self._make_world(small_snapshots, small_eligibility)
 
-            run_daily_cycle(
-                day=1, agent=agent,
-                patient_snapshots=small_snapshots,
-                eligibility_snapshots=small_eligibility,
-                state_machine=sm, lagged_queue=lq,
-            )
+            run_daily_cycle(day=1, agent=agent, world=world)
 
             day_dir = os.path.join(config.SIMULATION_DATA_DIR, "day_01")
             with open(os.path.join(day_dir, "actions_taken.json")) as f:
@@ -398,15 +386,9 @@ class TestDailyCycle:
 
         try:
             agent = ActorCriticCQL()
-            sm = ActionLifecycleTracker(rng=np.random.default_rng(42))
-            lq = LaggedRewardQueue(rng=np.random.default_rng(42))
+            world = self._make_world(small_snapshots, small_eligibility)
 
-            run_daily_cycle(
-                day=1, agent=agent,
-                patient_snapshots=small_snapshots,
-                eligibility_snapshots=small_eligibility,
-                state_machine=sm, lagged_queue=lq,
-            )
+            run_daily_cycle(day=1, agent=agent, world=world)
 
             day_dir = os.path.join(config.SIMULATION_DATA_DIR, "day_01")
             with open(os.path.join(day_dir, "experience_buffer.json")) as f:
@@ -433,15 +415,9 @@ class TestDailyCycle:
 
         try:
             agent = ActorCriticCQL()
-            sm = ActionLifecycleTracker(rng=np.random.default_rng(42))
-            lq = LaggedRewardQueue(rng=np.random.default_rng(42))
+            world = self._make_world(small_snapshots, small_eligibility)
 
-            run_daily_cycle(
-                day=1, agent=agent,
-                patient_snapshots=small_snapshots,
-                eligibility_snapshots=small_eligibility,
-                state_machine=sm, lagged_queue=lq,
-            )
+            run_daily_cycle(day=1, agent=agent, world=world)
 
             day_dir = os.path.join(config.SIMULATION_DATA_DIR, "day_01")
             with open(os.path.join(day_dir, "state_machine.json")) as f:

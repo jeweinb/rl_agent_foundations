@@ -127,6 +127,7 @@ def run_daily_cycle(
             "reward": outcome["reward"],
             "mask": mask.tolist(),
             "patient_id": pid,
+            "sim_day": day,
         })
 
         if not outcome["is_no_action"]:

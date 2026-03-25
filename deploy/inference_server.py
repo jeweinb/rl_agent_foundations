@@ -49,19 +49,39 @@ def load_model(checkpoint_path: str = "checkpoints/champion.pt"):
     return _model
 
 
-def predict_single(patient_data: dict) -> dict:
+def predict_single(patient_data: dict, system_context: dict = None) -> dict:
     """Generate action recommendation for a single patient."""
-    # Build state vector from request
+    ctx = system_context or {}
+    action_ctx = patient_data.get("action_context", {})
+
+    # Build state vector from 3-tier request data
     state_vec = snapshot_to_vector(
         patient_data,
-        budget_remaining=patient_data.get("global_budget_remaining"),
-        budget_max=patient_data.get("global_budget_max"),
-        patient_messages_received=patient_data.get("patient_messages_received", 0),
-        cohort_avg_messages=float(AVG_MESSAGES_PER_PATIENT),
-        patient_response_rate=patient_data.get("patient_response_rate", 0.0),
-        patient_avg_gap_age=patient_data.get("patient_avg_gap_age", 0.0),
-        patient_days_since_closure=patient_data.get("patient_days_since_closure", 90.0),
-        patient_channels_used=patient_data.get("patient_channels_used", 0),
+        # Tier 2: System state
+        day_of_year=ctx.get("day_of_year", 15),
+        budget_remaining=ctx.get("global_budget_remaining", patient_data.get("global_budget_remaining")),
+        budget_max=ctx.get("global_budget_max", patient_data.get("global_budget_max")),
+        budget_daily_spend=ctx.get("budget_daily_spend", 0.0),
+        cohort_size=ctx.get("cohort_size", 5000),
+        cohort_avg_messages=ctx.get("cohort_avg_messages", float(AVG_MESSAGES_PER_PATIENT)),
+        stars_score=ctx.get("stars_score", 1.0),
+        stars_7d_trend=ctx.get("stars_7d_trend", 0.0),
+        pct_measures_above_4=ctx.get("pct_measures_above_4", 0.0),
+        lowest_measure_stars=ctx.get("lowest_measure_stars", 1.0),
+        cohort_channel_rates=ctx.get("cohort_channel_rates"),
+        # Tier 3: Action context
+        patient_messages_received=action_ctx.get("messages_received", patient_data.get("patient_messages_received", 0)),
+        patient_response_rate=action_ctx.get("response_rate", patient_data.get("patient_response_rate", 0.0)),
+        patient_contacts_7d=action_ctx.get("contacts_7d", patient_data.get("contacts_this_week", 0)),
+        patient_contacts_14d=action_ctx.get("contacts_14d", 0),
+        patient_contacts_30d=action_ctx.get("contacts_30d", 0),
+        patient_days_since_contact=action_ctx.get("days_since_contact", 90),
+        patient_channels_used=action_ctx.get("channels_used", patient_data.get("patient_channels_used", 0)),
+        patient_channel_success=action_ctx.get("channel_success_rates"),
+        patient_days_since_closure=action_ctx.get("days_since_closure", patient_data.get("patient_days_since_closure", 90.0)),
+        patient_avg_gap_age=action_ctx.get("avg_gap_age", patient_data.get("patient_avg_gap_age", 0.0)),
+        num_pending_actions=action_ctx.get("num_pending_actions", 0),
+        num_in_flight_measures=action_ctx.get("num_in_flight_measures", 0),
     )
 
     # Build action mask
@@ -145,7 +165,20 @@ def predict():
 def predict_batch():
     data = request.get_json()
     patients = data.get("patients", [])
-    results = [predict_single(p) for p in patients]
+    system_context = {
+        "global_budget_remaining": data.get("global_budget_remaining"),
+        "global_budget_max": data.get("global_budget_max"),
+        "day_of_year": data.get("day_of_year", 15),
+        "cohort_size": data.get("cohort_size", len(patients)),
+        "cohort_avg_messages": data.get("cohort_avg_messages", float(AVG_MESSAGES_PER_PATIENT)),
+        "stars_score": data.get("stars_score", 1.0),
+        "stars_7d_trend": data.get("stars_7d_trend", 0.0),
+        "pct_measures_above_4": data.get("pct_measures_above_4", 0.0),
+        "lowest_measure_stars": data.get("lowest_measure_stars", 1.0),
+        "cohort_channel_rates": data.get("cohort_channel_rates"),
+        "budget_daily_spend": data.get("budget_daily_spend", 0.0),
+    }
+    results = [predict_single(p, system_context) for p in patients]
     budget_used = sum(1 for r in results if not r["is_no_action"])
     return jsonify({"predictions": results, "budget_used": budget_used})
 

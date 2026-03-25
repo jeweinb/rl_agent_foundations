@@ -20,6 +20,7 @@ from training.cql_trainer import train_cql, ActorCriticCQL
 from training.evaluation import evaluate_agent
 from environment.hedis_env import HEDISEnv
 from simulation.daily_cycle import run_daily_cycle
+from simulation.world import WorldSimulator
 from simulation.action_state_machine import ActionLifecycleTracker, ActionState
 from simulation.lagged_rewards import LaggedRewardQueue
 from simulation.metrics import MetricsTracker
@@ -162,16 +163,16 @@ class TestEndToEnd:
     def test_daily_cycle_with_trained_agent(self, e2e_data):
         import config
         config.SIMULATION_DATA_DIR = str(e2e_data["tmp"] / "simulation")
+        os.makedirs(config.SIMULATION_DATA_DIR, exist_ok=True)
 
         datasets = e2e_data["datasets"]
-        sm = ActionLifecycleTracker(rng=np.random.default_rng(42))
-        lq = LaggedRewardQueue(rng=np.random.default_rng(42))
+        world = WorldSimulator(
+            datasets["state_features"], datasets["action_eligibility"],
+            rng=np.random.default_rng(42),
+        )
 
         result = run_daily_cycle(
-            day=1, agent=e2e_data["agent"],
-            patient_snapshots=datasets["state_features"],
-            eligibility_snapshots=datasets["action_eligibility"],
-            state_machine=sm, lagged_queue=lq,
+            day=1, agent=e2e_data["agent"], world=world,
         )
 
         assert result["day"] == 1
@@ -187,17 +188,16 @@ class TestEndToEnd:
         os.makedirs(config.SIMULATION_DATA_DIR, exist_ok=True)
 
         datasets = e2e_data["datasets"]
-        sm = ActionLifecycleTracker(rng=np.random.default_rng(42))
-        lq = LaggedRewardQueue(rng=np.random.default_rng(42))
+        world = WorldSimulator(
+            datasets["state_features"], datasets["action_eligibility"],
+            rng=np.random.default_rng(42),
+        )
         metrics = MetricsTracker()
 
         total_actions_across_days = 0
         for day in range(1, 4):
             result = run_daily_cycle(
-                day=day, agent=e2e_data["agent"],
-                patient_snapshots=datasets["state_features"],
-                eligibility_snapshots=datasets["action_eligibility"],
-                state_machine=sm, lagged_queue=lq,
+                day=day, agent=e2e_data["agent"], world=world,
                 rng=np.random.default_rng(day),
             )
             total_actions_across_days += result["num_actions"]
@@ -210,7 +210,7 @@ class TestEndToEnd:
             )
 
         # State machine should track actions if any were taken
-        funnel = sm.get_funnel_stats()
+        funnel = world.state_machine.get_funnel_stats()
         total_tracked = sum(funnel.values())
         # With 30 patients some may be suppressed, so total_tracked could be 0;
         # assert it matches the number of actions the daily cycle reported

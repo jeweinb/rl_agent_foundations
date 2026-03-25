@@ -6,18 +6,24 @@ info:
     1. **Inference Endpoint** — real-time request/response for next-best-action
     2. **Nightly Training Job** — batch process (Databricks) for model retraining
 
-    The inference endpoint receives patient state + eligibility constraints and
-    returns the recommended action. The nightly job ingests the day's experiences
-    + resolved outcomes and produces an updated model checkpoint.
-  version: "1.0.0"
+    The model uses a **3-tier feature architecture** (164 dimensions):
+    - **Tier 1 — Patient State (86):** Demographics, clinical vitals, conditions,
+      medications, gap flags, risk scores, channel availability, and per-measure
+      clinical indicators
+    - **Tier 2 — System State (20):** Global budget, temporal context, cohort
+      population stats, STARS progress, and cohort channel effectiveness
+    - **Tier 3 — Action Context (58):** Patient contact history, per-channel
+      success rates, engagement rates, gap context, pending actions, action
+      history, and per-measure attempt summaries
+  version: "2.0.0"
 
 paths:
   /predict:
     post:
       summary: Get next-best-action for a patient
       description: |
-        Given a patient's current state, open gaps, channel availability, and
-        budget context, returns the recommended action (measure + channel + variant)
+        Given a patient's current state, system context, and action history,
+        returns the recommended action (measure + channel + variant)
         along with the model's confidence (Q-value) and alternative actions ranked.
       operationId: predict_action
       requestBody:
@@ -38,8 +44,9 @@ paths:
     post:
       summary: Batch prediction for multiple patients
       description: |
-        Submit a list of patients and receive action recommendations for all.
-        Used by the daily batch process to generate all outreach decisions at once.
+        Submit a list of patients with shared system context and receive
+        action recommendations for all. Used by the daily batch process
+        to generate all outreach decisions at once.
       operationId: predict_batch
       requestBody:
         required: true
@@ -53,12 +60,46 @@ paths:
                   type: array
                   items:
                     $ref: "#/components/schemas/PredictionRequest"
+                # Tier 2: System context (shared across all patients in batch)
                 global_budget_remaining:
                   type: integer
                   description: Remaining messages in the global budget pool
                 global_budget_max:
                   type: integer
                   description: Total global budget for the quarter
+                day_of_year:
+                  type: integer
+                  description: Current day of measurement year (1-365)
+                cohort_size:
+                  type: integer
+                  description: Total patients in the cohort
+                cohort_avg_messages:
+                  type: number
+                  description: Average messages per patient so far
+                budget_daily_spend:
+                  type: number
+                  description: Average daily budget spend rate
+                stars_score:
+                  type: number
+                  description: Current overall STARS score (1.0-5.0)
+                stars_7d_trend:
+                  type: number
+                  description: Change in STARS over last 7 days
+                pct_measures_above_4:
+                  type: number
+                  description: Fraction of measures at or above 4 stars
+                lowest_measure_stars:
+                  type: number
+                  description: Worst-performing measure's star rating
+                cohort_channel_rates:
+                  type: object
+                  description: Cohort-wide acceptance rates by channel
+                  properties:
+                    sms: { type: number, example: 0.35 }
+                    email: { type: number, example: 0.22 }
+                    portal: { type: number, example: 0.18 }
+                    app: { type: number, example: 0.12 }
+                    ivr: { type: number, example: 0.15 }
       responses:
         "200":
           description: Batch action recommendations
@@ -94,6 +135,9 @@ paths:
                     type: integer
                   model_checkpoint:
                     type: string
+                  state_dim:
+                    type: integer
+                    description: Feature vector dimension (164)
                   uptime_seconds:
                     type: number
 
@@ -105,110 +149,183 @@ components:
     PredictionRequest:
       type: object
       required: [patient_id, demographics, clinical, open_gaps, engagement]
+      description: |
+        Full patient context for action recommendation. Organized in 3 tiers:
+        - Patient-level fields feed Tier 1 (86 features)
+        - System-level fields (or batch-level overrides) feed Tier 2 (20 features)
+        - Action context feeds Tier 3 (58 features)
       properties:
         patient_id:
           type: string
           example: "P10042"
+
+        # ─── TIER 1: Patient State ───────────────────────────────────
         demographics:
           type: object
+          description: "Tier 1: Patient demographics (6 features)"
           properties:
-            age: { type: integer, example: 72 }
-            sex: { type: string, enum: [M, F], example: "F" }
+            age: { type: integer, example: 72, description: "Normalized: age/100" }
+            sex: { type: string, enum: [M, F], example: "F", description: "Encoded as sex_male, sex_female" }
             zip3: { type: string, example: "331" }
-            dual_eligible: { type: boolean }
-            lis_status: { type: boolean }
-            snp_flag: { type: boolean }
+            dual_eligible: { type: boolean, description: "Medicare-Medicaid dual eligible" }
+            lis_status: { type: boolean, description: "Low-Income Subsidy status" }
+            snp_flag: { type: boolean, description: "Special Needs Plan member" }
+
         clinical:
           type: object
+          description: "Tier 1: Clinical vitals (6 features) + Conditions (8 features)"
           properties:
-            bp_systolic_last: { type: number, example: 142.0 }
-            bp_diastolic_last: { type: number, example: 88.0 }
-            a1c_last: { type: number, example: 8.2 }
-            bmi: { type: number, example: 31.4 }
-            ckd_stage: { type: integer, example: 2 }
-            phq9_score: { type: integer, example: 6 }
+            bp_systolic_last: { type: number, example: 142.0, description: "Normalized: bp/200" }
+            bp_diastolic_last: { type: number, example: 88.0, description: "Normalized: bp/120" }
+            a1c_last: { type: number, example: 8.2, description: "Normalized: a1c/14" }
+            bmi: { type: number, example: 31.4, description: "Normalized: bmi/55" }
+            ckd_stage: { type: integer, example: 2, description: "Normalized: stage/5" }
+            phq9_score: { type: integer, example: 6, description: "Normalized: score/27" }
             conditions:
               type: object
+              description: "8 binary condition flags"
               properties:
-                diabetes: { type: boolean }
-                hypertension: { type: boolean }
-                hyperlipidemia: { type: boolean }
-                depression: { type: boolean }
-                ckd: { type: boolean }
-                chd: { type: boolean }
-                copd: { type: boolean }
-                chf: { type: boolean }
+                diabetes: { type: boolean, description: "Supports: EED, HBD, BPD, KED, MRA, MDS, DMC02" }
+                hypertension: { type: boolean, description: "Supports: CBP, BPD, MRA" }
+                hyperlipidemia: { type: boolean, description: "Supports: MAC, MDS" }
+                depression: { type: boolean, description: "Supports: DSF, DRR" }
+                ckd: { type: boolean, description: "Supports: KED" }
+                chd: { type: boolean, description: "Supports: MAC (cardiovascular)" }
+                copd: { type: boolean, description: "General comorbidity" }
+                chf: { type: boolean, description: "General comorbidity" }
+
         medication_fill_rates:
           type: object
+          description: "Tier 1: Medication adherence (4 features, 0.0-1.0)"
           properties:
-            statin: { type: number, example: 0.82 }
-            ace_arb: { type: number, example: 0.91 }
-            diabetes_oral: { type: number, example: 0.75 }
-            antidepressant: { type: number, example: 0.0 }
+            statin: { type: number, example: 0.82, description: "PDC for statins. Supports: MAC, MDS" }
+            ace_arb: { type: number, example: 0.91, description: "PDC for ACE/ARB. Supports: MRA" }
+            diabetes_oral: { type: number, example: 0.75, description: "PDC for diabetes meds. Supports: HBD" }
+            antidepressant: { type: number, example: 0.0, description: "PDC for antidepressants. Supports: DRR" }
+
         open_gaps:
           type: array
           items: { type: string }
+          description: "Tier 1: 18 binary gap flags (one per HEDIS measure)"
           example: ["COL", "EED", "CBP", "MDS"]
+
         closed_gaps:
           type: array
           items: { type: string }
           example: ["BCS", "FLU"]
+
         engagement:
           type: object
+          description: "Tier 1: Channel availability (4 features) + Tier 3: Engagement rates (5 features)"
           properties:
             sms_consent: { type: boolean, example: true }
             email_available: { type: boolean, example: true }
             portal_registered: { type: boolean, example: false }
             app_installed: { type: boolean, example: false }
-            sms_response_rate: { type: number, example: 0.6 }
-            email_open_rate: { type: number, example: 0.3 }
+            sms_response_rate: { type: number, example: 0.6, description: "Historical SMS click rate" }
+            email_open_rate: { type: number, example: 0.3, description: "Historical email open rate" }
             portal_engagement_rate: { type: number, example: 0.0 }
             app_engagement_rate: { type: number, example: 0.0 }
             ivr_completion_rate: { type: number, example: 0.15 }
-            total_contacts_90d: { type: integer, example: 5 }
-            days_since_last_contact: { type: integer, example: 14 }
+
         risk_scores:
           type: object
+          description: "Tier 1: Risk scores (4 features, 0.0-1.0)"
           properties:
             readmission_risk: { type: number, example: 0.12 }
             disenrollment_risk: { type: number, example: 0.05 }
             non_compliance_risk: { type: number, example: 0.35 }
-            composite_acuity: { type: number, example: 2.8 }
-        # Live context from the deployment system
-        patient_messages_received:
-          type: integer
-          description: Total messages this patient has received this quarter
-          example: 5
-        patient_response_rate:
-          type: number
-          description: Historical acceptance/click rate for this patient
-          example: 0.3
-        patient_days_since_closure:
-          type: number
-          description: Days since this patient last closed any gap
-          example: 45
-        contacts_this_week:
-          type: integer
-          description: Messages sent to this patient in the rolling 7-day window
-          example: 1
+            composite_acuity: { type: number, example: 2.8, description: "Normalized: acuity/5" }
+
+        measure_clinical:
+          type: object
+          description: |
+            Tier 1: Per-measure clinical indicators (36 features = 2 per HEDIS measure).
+            These tell the model whether this patient is clinically relevant for each
+            specific gap closure measure. Most features are derived from demographics,
+            conditions, and clinical data; these supplementary fields capture screening
+            history and care status not available elsewhere.
+          properties:
+            prior_colonoscopy: { type: number, description: "1.0 if prior colonoscopy on record (COL)" }
+            prior_mammogram: { type: number, description: "1.0 if prior mammogram on record (BCS)" }
+            years_since_eye_exam: { type: number, description: "Years since last eye exam (EED, DMC02)" }
+            prior_flu_vaccine: { type: number, description: "1.0 if flu vaccine last year (FVA, FVO, FLU)" }
+            prior_pneumo_vaccine: { type: number, description: "1.0 if pneumococcal vaccine on record (AIS)" }
+            immunocompromised: { type: number, description: "1.0 if immunocompromised status (FLU)" }
+            recent_discharge: { type: number, description: "1.0 if hospital discharge in last 30 days (TRC_M)" }
+            has_pcp: { type: number, description: "1.0 if primary care provider assigned (TRC_M)" }
+            prior_mh_followup: { type: number, description: "1.0 if prior mental health follow-up (DSF)" }
+
+        # ─── TIER 2: System State (can be passed per-patient or at batch level) ───
         global_budget_remaining:
           type: integer
-          description: Global budget pool remaining
+          description: "Tier 2: Global budget pool remaining"
           example: 102000
         global_budget_max:
           type: integer
-          description: Total global budget
+          description: "Tier 2: Total global budget"
           example: 150000
-        # State machine disposition of recent actions
-        recent_action_states:
-          type: array
-          description: Recent action lifecycle states from the external state machine
-          items:
-            type: object
-            properties:
-              measure: { type: string }
-              state: { type: string, enum: [CREATED, QUEUED, PRESENTED, VIEWED, ACCEPTED, DECLINED, COMPLETED, FAILED, EXPIRED] }
-              day_created: { type: integer }
+
+        # ─── TIER 3: Action Context ──────────────────────────────────
+        action_context:
+          type: object
+          description: |
+            Tier 3: Patient-specific action history and effectiveness metrics.
+            These features help the model learn from past interactions with this patient.
+          properties:
+            messages_received:
+              type: integer
+              description: "Total messages this patient has received this quarter"
+              example: 5
+            response_rate:
+              type: number
+              description: "Overall click/accept rate for this patient (0-1)"
+              example: 0.3
+            contacts_7d:
+              type: integer
+              description: "Messages in last 7 days"
+              example: 1
+            contacts_14d:
+              type: integer
+              description: "Messages in last 14 days"
+              example: 2
+            contacts_30d:
+              type: integer
+              description: "Messages in last 30 days"
+              example: 4
+            days_since_contact:
+              type: integer
+              description: "Days since last contact"
+              example: 3
+            channels_used:
+              type: integer
+              description: "Distinct channels used for this patient (0-5)"
+              example: 2
+            channel_success_rates:
+              type: object
+              description: "Per-channel acceptance rate for THIS patient"
+              properties:
+                sms: { type: number, example: 0.4 }
+                email: { type: number, example: 0.2 }
+                portal: { type: number, example: 0.0 }
+                app: { type: number, example: 0.0 }
+                ivr: { type: number, example: 0.1 }
+            days_since_closure:
+              type: number
+              description: "Days since this patient last closed any gap"
+              example: 45
+            avg_gap_age:
+              type: number
+              description: "Average days this patient's gaps have been open"
+              example: 120
+            num_pending_actions:
+              type: integer
+              description: "Actions currently in-flight for this patient"
+              example: 1
+            num_in_flight_measures:
+              type: integer
+              description: "Distinct measures with pending actions"
+              example: 1
 
     PredictionResponse:
       type: object
@@ -265,6 +382,174 @@ components:
           example: 0.245
 
     # ===================================================================
+    # STATE VECTOR DOCUMENTATION
+    # ===================================================================
+    StateVector:
+      type: object
+      description: |
+        164-dimensional feature vector organized in 3 tiers.
+        This documents the internal representation — callers provide
+        structured JSON (PredictionRequest), the server constructs the vector.
+      properties:
+        tier1_patient_state:
+          type: object
+          description: "Indices 0-85 (86 features)"
+          properties:
+            demographics:
+              type: string
+              description: |
+                [0] age_norm (age/100)
+                [1] sex_male (1.0 if M)
+                [2] sex_female (1.0 if F)
+                [3] dual_eligible
+                [4] lis_status
+                [5] snp_flag
+            clinical_vitals:
+              type: string
+              description: |
+                [6] bp_systolic_norm (bp/200)
+                [7] bp_diastolic_norm (bp/120)
+                [8] a1c_norm (a1c/14)
+                [9] bmi_norm (bmi/55)
+                [10] ckd_stage_norm (stage/5)
+                [11] phq9_norm (score/27)
+            conditions:
+              type: string
+              description: |
+                [12-19] Binary flags: diabetes, hypertension, hyperlipidemia,
+                depression, ckd, chd, copd, chf
+            medications:
+              type: string
+              description: |
+                [20-23] Fill rates (0-1): statin, ace_arb, diabetes_oral, antidepressant
+            gap_flags:
+              type: string
+              description: |
+                [24-41] Binary flags for 18 HEDIS measures:
+                COL, BCS, EED, FVA, FVO, AIS, FLU, CBP, BPD, HBD, KED,
+                MAC, MRA, MDS, DSF, DRR, DMC02, TRC_M
+            risk_scores:
+              type: string
+              description: |
+                [42-45] readmission_risk, disenrollment_risk, non_compliance_risk,
+                composite_acuity_norm (acuity/5)
+            channel_availability:
+              type: string
+              description: |
+                [46-49] Binary: sms_consent, email_available, portal_registered, app_installed
+            measure_clinical_indicators:
+              type: string
+              description: |
+                [50-85] 2 features per HEDIS measure (36 total):
+                COL: age_over_50, prior_colonoscopy
+                BCS: sex_female, prior_mammogram
+                EED: has_diabetes, years_since_eye_exam_norm
+                FVA: age_over_65, prior_flu_vaccine
+                FVO: chronic_condition_count_norm, prior_flu_vaccine
+                AIS: age_over_65, prior_pneumo_vaccine
+                FLU: immunocompromised, prior_flu_vaccine
+                CBP: has_hypertension, bp_controlled
+                BPD: has_diabetes_and_hypertension, bp_controlled
+                HBD: has_diabetes, a1c_controlled
+                KED: has_ckd, has_diabetes
+                MAC: has_cardiovascular, statin_adherent
+                MRA: has_diabetes_and_hypertension, ras_adherent
+                MDS: has_diabetes_and_hyperlipidemia, statin_adherent
+                DSF: has_depression, prior_mh_followup
+                DRR: has_depression, on_antidepressant
+                DMC02: has_diabetes, years_since_eye_exam_norm
+                TRC_M: recent_discharge, has_pcp
+
+        tier2_system_state:
+          type: object
+          description: "Indices 86-105 (20 features)"
+          properties:
+            budget:
+              type: string
+              description: |
+                [86] budget_remaining_norm (remaining/total)
+                [87] budget_utilization (1 - remaining/total)
+                [88] budget_is_warning (1.0 if < 25%)
+                [89] budget_is_critical (1.0 if < 10%)
+                [90] budget_burn_rate_norm (daily_spend / daily_budget / 3)
+                [91] budget_projected_days_left (projected_days / 365)
+            temporal:
+              type: string
+              description: |
+                [92] day_of_year_sin
+                [93] day_of_year_cos
+                [94] measurement_year_progress (day/365)
+            population:
+              type: string
+              description: |
+                [95] cohort_size_norm (size/10000)
+                [96] cohort_avg_messages_norm
+            stars_progress:
+              type: string
+              description: |
+                [97] overall_stars_norm (stars/5)
+                [98] stars_7d_trend (-1 to 1)
+                [99] pct_measures_above_4star (0-1)
+                [100] lowest_measure_stars_norm (stars/5)
+            cohort_channel_effectiveness:
+              type: string
+              description: |
+                [101-105] Acceptance rates: sms, email, portal, app, ivr
+
+        tier3_action_context:
+          type: object
+          description: "Indices 106-163 (58 features)"
+          properties:
+            contact_history:
+              type: string
+              description: |
+                [106] patient_messages_received_norm
+                [107] patient_messages_vs_cohort
+                [108] patient_contacts_7d (normalized by max_per_week)
+                [109] patient_contacts_14d
+                [110] patient_contacts_30d
+                [111] patient_days_since_last_contact (days/90)
+                [112] patient_overall_response_rate (0-1)
+                [113] patient_channel_diversity (channels_used/5)
+            patient_channel_success:
+              type: string
+              description: |
+                [114-118] Per-channel success rates for THIS patient:
+                sms, email, portal, app, ivr
+            engagement_rates:
+              type: string
+              description: |
+                [119-123] Historical rates: sms_response, email_open,
+                portal_engagement, app_engagement, ivr_completion
+            gap_context:
+              type: string
+              description: |
+                [124] num_open_gaps_norm (open/18)
+                [125] avg_gap_age_norm (age/365)
+                [126] days_since_last_closure (days/90)
+                [127] highest_priority_gap_weight (weight/3)
+                [128] num_closed_gaps_norm (closed/18)
+            pending_actions:
+              type: string
+              description: |
+                [129] num_pending_actions_norm (pending/5)
+                [130] num_in_flight_measures (measures/18)
+                [131] has_action_in_flight (binary)
+            action_history:
+              type: string
+              description: |
+                [132-141] Last 5 actions as (measure_idx_norm, channel_idx_norm)
+            gap_specific_detail:
+              type: string
+              description: |
+                [142-151] Top 5 open gaps: (days_since_attempt_norm, attempt_count_norm)
+            measure_attempt_summary:
+              type: string
+              description: |
+                [152-163] Top 3 priority open gaps:
+                (measure_idx, attempt_count, best_channel, days_since_last)
+
+    # ===================================================================
     # NIGHTLY TRAINING JOB SCHEMAS
     # ===================================================================
     NightlyTrainingInput:
@@ -279,19 +564,20 @@ components:
           description: Today's action experiences (one per patient)
           items:
             type: object
-            required: [patient_id, obs, action, reward, mask]
+            required: [patient_id, obs, action, reward, mask, sim_day]
             properties:
               patient_id: { type: string }
               obs:
                 type: array
                 items: { type: number }
-                description: 96-dim state vector
+                description: "164-dim state vector (3-tier)"
               action: { type: integer, description: Action ID taken }
               reward: { type: number, description: Immediate reward (may be retroactively updated) }
               mask:
                 type: array
                 items: { type: number }
-                description: 125-dim action mask at time of decision
+                description: "Action mask at time of decision"
+              sim_day: { type: integer, description: Simulation day for reward model training }
         resolved_closures:
           type: array
           description: Gap closures that resolved since last training (from claims data)
@@ -320,10 +606,14 @@ components:
         training_config:
           type: object
           properties:
-            cql_epochs: { type: integer, default: 5 }
-            batch_size: { type: integer, default: 256 }
-            eval_episodes: { type: integer, default: 1000 }
-            min_q_weight: { type: number, default: 1.0 }
+            cql_epochs: { type: integer, default: 20, description: "Increased from 5 for better convergence" }
+            batch_size: { type: integer, default: 1024 }
+            eval_episodes: { type: integer, default: 50 }
+            min_q_weight: { type: number, default: 5.0, description: "Standard CQL conservatism" }
+            improvement_threshold: { type: number, default: 0.02, description: "Min relative improvement for promotion" }
+            history_replay_frac: { type: number, default: 0.05, description: "Fraction of historical data for replay" }
+            gamma: { type: number, default: 0.97, description: "Discount factor for 30-step episodes" }
+            lagrangian: { type: boolean, default: true, description: "Auto-tune CQL penalty via Lagrangian dual" }
 
     NightlyTrainingOutput:
       type: object
@@ -331,10 +621,10 @@ components:
       properties:
         champion_score:
           type: number
-          description: Champion model's mean reward on learned world evaluation
+          description: Champion model's mean reward on evaluation
         challenger_score:
           type: number
-          description: Challenger model's mean reward on learned world evaluation
+          description: Challenger model's mean reward on evaluation
         promoted:
           type: boolean
           description: Whether the challenger was promoted to champion
@@ -349,12 +639,14 @@ components:
             transitions_trained: { type: integer }
             cql_loss: { type: number }
             actor_loss: { type: number }
+            cql_alpha: { type: number, description: "Lagrangian CQL penalty weight" }
         simulation_predictions:
           type: object
-          description: What the learned world predicts for tomorrow
+          description: Model-based 90-day simulation predictions (WorldSimulator with learned models)
           properties:
             mean_reward: { type: number }
             no_action_rate: { type: number }
+            final_stars: { type: number }
             sim_closure_rates:
               type: object
               additionalProperties: { type: number }
@@ -364,3 +656,10 @@ components:
             action_dist_by_measure:
               type: object
               additionalProperties: { type: integer }
+            stars_trajectory:
+              type: array
+              items:
+                type: object
+                properties:
+                  day: { type: integer }
+                  stars: { type: number }

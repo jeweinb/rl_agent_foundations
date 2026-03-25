@@ -157,22 +157,17 @@ def register_callbacks(app):
         else:
             cum = _empty_fig("Cumulative Reward — waiting for data...")
 
-        # Regret Curve — oracle is the best single-day performance observed so far
+        # Regret Curve — fixed oracle baseline for consistent measurement
         # As model improves, daily reward approaches oracle → regret flattens
         if metrics and len(metrics) > 1:
             reg = go.Figure()
-            # Running best: track the best daily reward seen so far
-            best_so_far = []
-            running_best = float("-inf")
-            for m in metrics:
-                running_best = max(running_best, m["daily_reward"])
-                best_so_far.append(running_best)
-
-            # Regret = cumulative gap between current performance and running best
+            # Fixed oracle: use a reasonable upper bound on daily reward
+            # This avoids the misleading "running best" that makes regret always climb
+            oracle_reward = 5.0
             regret = []
             cum_regret = 0.0
-            for i, m in enumerate(metrics):
-                cum_regret += best_so_far[i] - m["daily_reward"]
+            for m in metrics:
+                cum_regret += max(0.0, oracle_reward - m["daily_reward"])
                 regret.append(cum_regret)
 
             reg.add_trace(go.Scatter(x=days, y=regret, mode="lines", name="Cumulative Regret",

@@ -132,7 +132,7 @@ class ActorCriticCQL:
         lr_actor: float = 3e-4,
         lr_critic: float = 3e-4,
         lr_alpha: float = 3e-4,
-        gamma: float = 0.99,
+        gamma: float = 0.97,
         tau: float = 0.005,
         min_q_weight: float = 5.0,
         target_entropy: float = None,
@@ -158,10 +158,16 @@ class ActorCriticCQL:
             self.target_entropy = target_entropy
         self.log_alpha = torch.zeros(1, requires_grad=True)
 
+        # Lagrangian CQL: auto-tune the conservative penalty weight
+        self.use_lagrangian = CQL_CONFIG.get("lagrangian", False)
+        self.log_cql_alpha = torch.zeros(1, requires_grad=True)
+        self.cql_target_penalty = min_q_weight  # Target CQL penalty magnitude
+
         # Optimizers
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=lr_actor)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr_critic)
         self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=lr_alpha)
+        self.cql_alpha_optimizer = torch.optim.Adam([self.log_cql_alpha], lr=lr_critic)
 
     @property
     def alpha(self):
@@ -200,10 +206,20 @@ class ActorCriticCQL:
         cql_q1 = torch.logsumexp(masked_q1, dim=1).mean() - q1_selected.mean()
         cql_q2 = torch.logsumexp(masked_q2, dim=1).mean() - q2_selected.mean()
 
-        critic_loss = (
-            td_loss1 + td_loss2
-            + self.min_q_weight * (cql_q1 + cql_q2)
-        )
+        cql_penalty = cql_q1 + cql_q2
+
+        if self.use_lagrangian:
+            # Lagrangian dual: auto-tune CQL weight so penalty stays near target
+            cql_alpha = self.log_cql_alpha.exp().clamp(min=0.0)
+            critic_loss = td_loss1 + td_loss2 + cql_alpha * cql_penalty
+
+            # Update CQL alpha: increase if penalty > target, decrease otherwise
+            cql_alpha_loss = -self.log_cql_alpha.exp() * (cql_penalty.detach() - self.cql_target_penalty)
+            self.cql_alpha_optimizer.zero_grad()
+            cql_alpha_loss.backward()
+            self.cql_alpha_optimizer.step()
+        else:
+            critic_loss = td_loss1 + td_loss2 + self.min_q_weight * cql_penalty
 
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
@@ -213,6 +229,7 @@ class ActorCriticCQL:
         return {
             "td_loss": (td_loss1.item() + td_loss2.item()) / 2,
             "cql_penalty": (cql_q1.item() + cql_q2.item()) / 2,
+            "cql_alpha": self.log_cql_alpha.exp().item() if self.use_lagrangian else self.min_q_weight,
             "critic_loss": critic_loss.item(),
         }
 
@@ -267,6 +284,7 @@ class ActorCriticCQL:
             "critic": self.critic.state_dict(),
             "critic_target": self.critic_target.state_dict(),
             "log_alpha": self.log_alpha.data,
+            "log_cql_alpha": self.log_cql_alpha.data,
         }
 
     def load_state_dict(self, state_dict):
@@ -274,6 +292,8 @@ class ActorCriticCQL:
         self.critic.load_state_dict(state_dict["critic"])
         self.critic_target.load_state_dict(state_dict["critic_target"])
         self.log_alpha.data = state_dict["log_alpha"]
+        if "log_cql_alpha" in state_dict:
+            self.log_cql_alpha.data = state_dict["log_cql_alpha"]
 
 
 class CQLDataset(Dataset):

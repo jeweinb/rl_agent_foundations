@@ -265,7 +265,7 @@ SECOND_BEST_CHANNEL_BY_CATEGORY: Dict[str, str] = {
 # ---------------------------------------------------------------------------
 # State Space
 # ---------------------------------------------------------------------------
-STATE_DIM = 96  # padded
+STATE_DIM = 164  # 3-tier: patient(86) + system(20) + action(58)
 
 # ---------------------------------------------------------------------------
 # Cohort & Simulation
@@ -278,15 +278,53 @@ MIN_DAYS_BETWEEN_EMAIL = 30  # Email suppression: max 1 email per 30 days
 
 # ---------------------------------------------------------------------------
 # Feature vector index constants (for models that manipulate raw state vectors)
-# Layout: demographics(6) + clinical(6) + conditions(8) + meds(4) + gaps(18)
-#        + engagement(11) + risk(4) + budget(4) + temporal(3) + action_hist(10)
-#        + gap_specific(10) + padding
+#
+# 3-TIER LAYOUT:
+#   TIER 1 — Patient State (50 features, indices 0-49)
+#     Demographics (6) + Clinical (6) + Conditions (8) + Medications (4)
+#     + Gap flags (18) + Risk scores (4) + Channel availability (4)
+#
+#   TIER 2 — System State (20 features, indices 50-69)
+#     Budget (6) + Temporal (3) + Population (2) + STARS progress (4)
+#     + Cohort channel effectiveness (5)
+#
+#   TIER 3 — Action Context (58 features, indices 70-127)
+#     Contact history (8) + Patient channel success (5) + Engagement rates (5)
+#     + Gap context (5) + Pending actions (3) + Action history (10)
+#     + Gap-specific detail (10) + Per-measure attempts (12)
 # ---------------------------------------------------------------------------
-FEAT_IDX_GAP_FLAGS_START = 24   # 6+6+8+4
-FEAT_IDX_ENGAGEMENT_START = 42  # 24+18
-FEAT_IDX_RISK_START = 53        # 42+11
-FEAT_IDX_BUDGET_START = 57      # 53+4
-FEAT_IDX_TEMPORAL_START = 67    # 57+10 (global budget 4 + patient context 6)
+# Tier 1: Patient State
+TIER1_START = 0
+FEAT_IDX_DEMOGRAPHICS_START = 0     # 6 features
+FEAT_IDX_CLINICAL_START = 6         # 6 features
+FEAT_IDX_CONDITIONS_START = 12      # 8 features
+FEAT_IDX_MEDICATIONS_START = 20     # 4 features
+FEAT_IDX_GAP_FLAGS_START = 24       # 18 features
+FEAT_IDX_RISK_START = 42            # 4 features
+FEAT_IDX_CHANNEL_AVAIL_START = 46   # 4 features
+FEAT_IDX_MEASURE_CLINICAL_START = 50  # 36 features (2 per HEDIS measure)
+TIER1_END = 86
+
+# Tier 2: System State
+TIER2_START = 86
+FEAT_IDX_BUDGET_START = 86          # 6 features
+FEAT_IDX_TEMPORAL_START = 92        # 3 features
+FEAT_IDX_POPULATION_START = 95      # 2 features
+FEAT_IDX_STARS_PROGRESS_START = 97  # 4 features
+FEAT_IDX_COHORT_CHANNEL_START = 101 # 5 features
+TIER2_END = 106
+
+# Tier 3: Action Context
+TIER3_START = 106
+FEAT_IDX_CONTACT_HISTORY_START = 106 # 8 features
+FEAT_IDX_PATIENT_CHANNEL_SUCCESS_START = 114  # 5 features
+FEAT_IDX_ENGAGEMENT_START = 119      # 5 features
+FEAT_IDX_GAP_CONTEXT_START = 124     # 5 features
+FEAT_IDX_PENDING_ACTIONS_START = 129 # 3 features
+FEAT_IDX_ACTION_HISTORY_START = 132  # 10 features
+FEAT_IDX_GAP_SPECIFIC_START = 142    # 10 features
+FEAT_IDX_MEASURE_ATTEMPTS_START = 152  # 12 features
+TIER3_END = 164
 
 # Normalization constants
 CONTACT_NORMALIZATION_MAX = 20
@@ -353,10 +391,10 @@ REWARD_WEIGHTS = {
 # CQL Hyperparameters
 # ---------------------------------------------------------------------------
 CQL_CONFIG = {
-    "min_q_weight": 0.5,     # Light conservatism for nightly incremental updates
+    "min_q_weight": 5.0,     # Standard CQL conservatism (penalize OOD Q-values)
     "lagrangian": True,
     "bc_iters": 5,
-    "cql_iters": 5,
+    "cql_iters": 20,
     "lr": 1e-4,              # Lower LR for stable incremental learning
 }
 

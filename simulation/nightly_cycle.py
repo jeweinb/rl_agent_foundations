@@ -65,6 +65,8 @@ def _experiences_to_episodes(experiences: List[Dict], rng=None) -> List[Dict]:
         rewards = np.array([e["reward"] for e in exps], dtype=np.float32)
         masks = np.array([e["mask"] for e in exps], dtype=np.float32)
         T = len(exps)
+        # Carry sim_day through for reward model training
+        sim_day = exps[-1].get("sim_day", 30)
         episodes.append({
             "obs": obs,
             "actions": actions,
@@ -72,6 +74,7 @@ def _experiences_to_episodes(experiences: List[Dict], rng=None) -> List[Dict]:
             "action_mask": masks,
             "terminateds": np.zeros(T, dtype=np.float32),
             "truncateds": np.array([0.0] * (T - 1) + [1.0], dtype=np.float32),
+            "sim_day": sim_day,
         })
     return episodes
 
@@ -99,7 +102,7 @@ def run_nightly_cycle(
     eligibility_snapshots: list,
     dynamics_model=None,
     reward_model=None,
-    cql_epochs: int = 5,
+    cql_epochs: int = 20,
     eval_episodes: int = 50,
     history_replay_frac: float = 0.05,
     verbose: bool = True,
@@ -145,7 +148,7 @@ def run_nightly_cycle(
 
     # Tier 3: Historical sample (50% of pre-simulation data)
     historical = _get_historical_episodes()
-    n_replay = max(1, int(len(historical) * 0.50))
+    n_replay = max(1, int(len(historical) * history_replay_frac))
     replay_indices = rng.choice(len(historical), size=min(n_replay, len(historical)), replace=False)
     replay_episodes = [historical[i] for i in replay_indices]
 
@@ -192,9 +195,11 @@ def run_nightly_cycle(
                 states = torch.FloatTensor(ep["obs"])
                 actions = torch.LongTensor(ep["actions"])
                 rewards = torch.FloatTensor(ep["rewards"])
-                # Positive reward → gap likely closed
-                labels = (rewards > 0.1).float()
-                days = torch.ones(len(states)) * 30.0  # Train at 30-day horizon
+                # Normalized continuous labels preserving measure weight signal
+                labels = (rewards / 3.05).clamp(0, 1)
+                # Use actual simulation day for time-aware reward prediction
+                sim_day = ep.get("sim_day", 30)
+                days = torch.full((len(states),), float(sim_day))
                 opt_r.zero_grad()
                 loss = reward_model.compute_loss(states, actions, days, labels)
                 loss.backward()
@@ -220,10 +225,18 @@ def run_nightly_cycle(
         log.error(f"CQL training failed: {e}")
         challenger = champion  # Fall back to champion
 
-    # --- 6. Evaluate champion vs challenger on LEARNED world ---
+    # --- 6. Evaluate champion vs challenger on HELD-OUT patients ---
+    # Use a fixed 20% holdout split (seeded for consistency across nights)
     try:
+        eval_rng = np.random.default_rng(42)  # Fixed seed for consistent split
+        n_patients = len(patient_snapshots)
+        n_eval = max(1, int(n_patients * 0.2))
+        eval_indices = eval_rng.choice(n_patients, size=n_eval, replace=False)
+        eval_snapshots = [patient_snapshots[i] for i in eval_indices]
+        eval_elig = [eligibility_snapshots[i] for i in eval_indices] if eligibility_snapshots else []
+
         env = HEDISEnv(
-            patient_snapshots, eligibility_snapshots,
+            eval_snapshots, eval_elig,
             dynamics_model=dynamics_model,
             reward_model=reward_model,
         )
@@ -258,11 +271,14 @@ def run_nightly_cycle(
     # --- 7. Detailed simulation rollout on the learned world ---
     winner = new_champion
     try:
-        # 90-day quarter simulation on 1000 patients using WorldSimulator (ground truth)
+        # 90-day quarter simulation on 1000 patients using WorldSimulator
+        # Pass learned models so the simulation uses production-realistic predictions
         sim_detail = evaluate_agent_detailed(
             winner, patient_snapshots,
             n_episodes=1000, seed=day * 2000,
             eligibility_snapshots=eligibility_snapshots,
+            dynamics_model=dynamics_model,
+            reward_model=reward_model,
         )
     except Exception as e:
         log.error(f"Detailed evaluation failed: {e}")

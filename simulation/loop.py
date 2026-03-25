@@ -122,7 +122,10 @@ def run_simulation(
     # =========================================================================
     # Create World Simulator (owns all business rules and patient state)
     # =========================================================================
-    world = WorldSimulator(patient_snapshots, eligibility_snapshots, rng=rng)
+    world = WorldSimulator(
+        patient_snapshots, eligibility_snapshots, rng=rng,
+        dynamics_model=dynamics_model, reward_model=reward_model,
+    )
 
     # Warm start patients mid-flight
     log.info("Warm-starting patient cohort...")

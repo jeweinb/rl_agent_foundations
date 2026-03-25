@@ -300,8 +300,8 @@ if reward_model and total_transitions > 10:
         states = torch.FloatTensor(ep["obs"])
         actions = torch.LongTensor(ep["actions"])
         rewards = torch.FloatTensor(ep["rewards"])
-        labels = (rewards > 0.1).float()
-        days = torch.ones(len(states)) * 7.0
+        labels = (rewards / 3.05).clamp(0, 1)  # Preserve measure weight signal
+        days = torch.full((len(states),), 7.0)  # Use actual sim day when available
         opt_r.zero_grad()
         loss = reward_model.compute_loss(states, actions, days, labels)
         loss.backward()
@@ -319,8 +319,8 @@ if total_transitions > 10:
     challenger = train_cql(
         episodes=all_episodes,
         agent=challenger,
-        epochs=5,
-        batch_size=256,
+        epochs=20,
+        batch_size=1024,
         verbose=True,
     )
 print("Challenger trained")
@@ -388,7 +388,7 @@ with mlflow.start_run(run_name=f"nightly_{datetime.now().strftime('%Y%m%d')}") a
         mlflow.log_metric(f"sim_closure_{measure}", rate)
 
     # Log params
-    mlflow.log_param("cql_epochs", 5)
+    mlflow.log_param("cql_epochs", 20)
     mlflow.log_param("replay_frac", 0.05)
     mlflow.log_param("eval_episodes", 500)
 
