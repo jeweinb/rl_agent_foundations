@@ -168,7 +168,7 @@ def run_nightly_cycle(
 
         if dynamics_model is not None and total_transitions > 10:
             dynamics_model.train()
-            opt_d = torch.optim.Adam(dynamics_model.parameters(), lr=3e-4)
+            opt_d = torch.optim.Adam(dynamics_model.parameters(), lr=1e-4)
             # Train on ALL episodes (same batch as CQL)
             for ep in training_episodes:
                 if len(ep["obs"]) < 2:
@@ -184,7 +184,7 @@ def run_nightly_cycle(
 
         if reward_model is not None and total_transitions > 10:
             reward_model.train()
-            opt_r = torch.optim.Adam(reward_model.parameters(), lr=3e-4)
+            opt_r = torch.optim.Adam(reward_model.parameters(), lr=1e-4)
             # Train on ALL episodes (same batch as CQL)
             for ep in training_episodes:
                 if len(ep["obs"]) < 2:
@@ -258,9 +258,11 @@ def run_nightly_cycle(
     # --- 7. Detailed simulation rollout on the learned world ---
     winner = new_champion
     try:
-        # 90-day quarter simulation on 1000 patients
+        # 90-day quarter simulation on 1000 patients using WorldSimulator (ground truth)
         sim_detail = evaluate_agent_detailed(
-            winner, env, n_episodes=1000, seed=day * 2000,
+            winner, patient_snapshots,
+            n_episodes=1000, seed=day * 2000,
+            eligibility_snapshots=eligibility_snapshots,
         )
     except Exception as e:
         log.error(f"Detailed evaluation failed: {e}")
@@ -290,6 +292,7 @@ def run_nightly_cycle(
                  "alpha": h["alpha"], "entropy": h["entropy"]}
                 for h in history
             ],
+            "step_history": getattr(challenger, '_step_history', []),
         }
 
     # Compute Q-value stats for debugging

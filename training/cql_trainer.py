@@ -390,8 +390,10 @@ def train_cql(
     agent.actor.train()
     agent.critic.train()
 
-    # Track training metrics for debugging
-    training_history = []
+    # Track per-step training metrics for debugging
+    training_history = []  # Per-epoch averages (for nightly trend)
+    step_history = []      # Per-batch-step (for per-night drill-down)
+    global_step = 0
 
     for epoch in range(epochs):
         total_critic_loss = 0.0
@@ -417,6 +419,19 @@ def train_cql(
             last_alpha = alpha_info["alpha"]
             last_entropy = alpha_info["entropy"]
             n_batches += 1
+            global_step += 1
+
+            # Log every 10th step to keep data manageable
+            if global_step % 10 == 0:
+                step_history.append({
+                    "step": global_step,
+                    "critic": critic_info["critic_loss"],
+                    "td": critic_info["td_loss"],
+                    "actor": actor_info["actor_loss"],
+                    "cql": critic_info["cql_penalty"],
+                    "alpha": last_alpha,
+                    "entropy": last_entropy,
+                })
 
         epoch_metrics = {
             "epoch": epoch + 1,
@@ -440,4 +455,5 @@ def train_cql(
 
     # Attach training history to agent for retrieval
     agent._training_history = training_history
+    agent._step_history = step_history
     return agent

@@ -58,7 +58,7 @@ def create_layout():
             html.Div(id="sim-action-breakdown", style={"maxHeight": "350px", "overflowY": "auto"}),
         ], style={"flex": "none", "marginBottom": "16px"}),
 
-        # Model debugging
+        # Model debugging — nightly trends
         card([
             section_title("CQL Training Diagnostics",
                          "Monitor for training instability: loss divergence, entropy collapse, Q-value explosion"),
@@ -77,6 +77,19 @@ def create_layout():
             card([dcc.Graph(id="debug-cql-penalty", style={"height": "300px"},
                            config={"displayModeBar": False})]),
         ]),
+
+        # Per-night epoch-by-epoch loss curve
+        card([
+            section_title("Per-Night Training Curve",
+                         "Select a training day to see the epoch-by-epoch convergence within that night's update"),
+            html.Div([
+                html.Label("Training Day:", style={"fontWeight": "500", "marginRight": "8px"}),
+                dcc.Dropdown(id="debug-day-selector", style={"width": "200px", "display": "inline-block"},
+                            clearable=False),
+            ], style={"marginBottom": "12px"}),
+            dcc.Graph(id="debug-epoch-curve", style={"height": "320px"},
+                     config={"displayModeBar": False}),
+        ], style={"flex": "none", "marginBottom": "16px"}),
 
         # Promotion history
         card([

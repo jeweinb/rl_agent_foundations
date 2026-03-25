@@ -725,25 +725,37 @@ def register_callbacks(app):
             ch_fig = _empty_fig("Waiting for simulation predictions...")
 
         # --- Simulated STARS projection ---
-        # Shows both: daily improvement of the model AND the latest full-quarter projection
+        # Show the latest 90-day trajectory from the most recent nightly simulation
         if sim_preds and len(sim_preds) > 0:
+            latest_pred = sim_preds[-1]
+            trajectory = latest_pred.get("stars_trajectory", [])
+
             stars_proj = go.Figure()
 
-            # Line 1: Final STARS score from each nightly full-quarter simulation
-            sim_days_x = [p["day"] for p in sim_preds]
-            final_stars = [p.get("final_stars", 1.0) for p in sim_preds]
-            stars_proj.add_trace(go.Scatter(
-                x=sim_days_x, y=final_stars, mode="lines+markers",
-                name="Projected Quarter STARS", line=dict(color=HUMANA_GREEN, width=3),
-                marker=dict(size=8),
-            ))
+            if trajectory:
+                traj_days = [t["day"] for t in trajectory]
+                traj_stars = [t["stars"] for t in trajectory]
+                stars_proj.add_trace(go.Scatter(
+                    x=traj_days, y=traj_stars, mode="lines+markers",
+                    name="Simulated STARS", line=dict(color=HUMANA_GREEN, width=3),
+                    marker=dict(size=6),
+                ))
+
+            # Also show final STARS from each past nightly run
+            all_finals = [(p["day"], p.get("final_stars", 1.0)) for p in sim_preds]
+            if len(all_finals) > 1:
+                stars_proj.add_trace(go.Scatter(
+                    x=[f[0] for f in all_finals], y=[f[1] for f in all_finals],
+                    mode="markers", name="Nightly Final STARS",
+                    marker=dict(size=10, color=NAVY, symbol="diamond"),
+                ))
 
             stars_proj.add_hline(y=4.0, line_dash="dash", line_color="#ef4444",
                                annotation_text="4★ Bonus")
             _styled_fig(stars_proj)
             stars_proj.update_layout(
-                title="Projected STARS After Full 90-Day Quarter (Learned World)",
-                xaxis_title="Training Day", yaxis_title="End-of-Quarter STARS",
+                title="Simulated 90-Day Quarter (Ground Truth World)",
+                xaxis_title="Simulation Day", yaxis_title="STARS Score",
                 yaxis=dict(range=[1, 5]),
             )
         else:
@@ -874,6 +886,70 @@ def register_callbacks(app):
             cql_fig = _empty_fig("CQL penalty — waiting for data...")
 
         return cc_fig, mv_fig, sim_summary, act_dist, closure_fig, ch_fig, stars_proj, table, sim_breakdown, losses_fig, q_fig, ent_fig, cql_fig
+
+    # =========================================================================
+    # Tab 3b: Per-Night Training Curve (drill-down)
+    # =========================================================================
+    @app.callback(
+        Output("debug-day-selector", "options"),
+        Input("interval-component", "n_intervals"),
+    )
+    def update_debug_day_options(_):
+        from dashboard.data_feed import load_training_debug
+        debug_data = load_training_debug()
+        if not debug_data:
+            return []
+        return [{"label": f"Day {d['day']}", "value": d["day"]} for d in debug_data]
+
+    @app.callback(
+        Output("debug-epoch-curve", "figure"),
+        [Input("debug-day-selector", "value"),
+         Input("interval-component", "n_intervals")],
+    )
+    def update_debug_epoch_curve(selected_day, _):
+        from dashboard.data_feed import load_training_debug
+        if not selected_day:
+            return _empty_fig("Select a training day above...")
+
+        debug_data = load_training_debug()
+        day_data = next((d for d in debug_data if d.get("day") == selected_day), None)
+        if not day_data:
+            return _empty_fig(f"No data for day {selected_day}")
+
+        # Prefer step_history (per-batch), fall back to loss_history (per-epoch)
+        steps = day_data.get("step_history", [])
+        if steps:
+            x = [s["step"] for s in steps]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=x, y=[s["critic"] for s in steps],
+                                     mode="lines", name="Critic", line=dict(color="#ef4444", width=1.5)))
+            fig.add_trace(go.Scatter(x=x, y=[s["td"] for s in steps],
+                                     mode="lines", name="TD", line=dict(color="#f59e0b", width=1.5)))
+            fig.add_trace(go.Scatter(x=x, y=[s["actor"] for s in steps],
+                                     mode="lines", name="Actor", line=dict(color=NAVY, width=1.5)))
+            fig.add_trace(go.Scatter(x=x, y=[s["cql"] for s in steps],
+                                     mode="lines", name="CQL Penalty", line=dict(color="#8b5cf6", width=1.5)))
+            _styled_fig(fig)
+            fig.update_layout(title=f"Day {selected_day} — Per-Step Loss Curve",
+                            xaxis_title="Gradient Step", yaxis_title="Loss")
+        else:
+            history = day_data.get("loss_history", [])
+            if history:
+                epochs = [h["epoch"] for h in history]
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=epochs, y=[h["critic"] for h in history],
+                                         mode="lines+markers", name="Critic", line=dict(color="#ef4444")))
+                fig.add_trace(go.Scatter(x=epochs, y=[h["td"] for h in history],
+                                         mode="lines+markers", name="TD", line=dict(color="#f59e0b")))
+                fig.add_trace(go.Scatter(x=epochs, y=[h["actor"] for h in history],
+                                         mode="lines+markers", name="Actor", line=dict(color=NAVY)))
+                _styled_fig(fig)
+                fig.update_layout(title=f"Day {selected_day} — Per-Epoch Loss",
+                                xaxis_title="Epoch", yaxis_title="Loss")
+            else:
+                fig = _empty_fig(f"No loss history for day {selected_day}")
+
+        return fig
 
     # =========================================================================
     # Tab 4: Measure Deep Dive

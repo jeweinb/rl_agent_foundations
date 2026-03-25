@@ -122,111 +122,127 @@ def compare_models(
 
 def evaluate_agent_detailed(
     agent,
-    env: HEDISEnv,
+    env_or_snapshots,
     n_episodes: int = 1000,
     seed: int = 42,
+    eligibility_snapshots=None,
 ) -> Dict[str, Any]:
-    """Simulate a full 90-day quarter across the cohort.
+    """Simulate a full 90-day quarter using WorldSimulator (ground truth).
 
-    Each patient gets a 90-step episode (one quarter). Tracks STARS trajectory
-    over time so we can see gaps closing and STARS climbing toward 4.0.
+    Runs the agent across a cohort of patients for 90 simulated days with
+    shared global budget, weekly suppression, archetype-driven closures,
+    and lagged rewards. Tracks STARS trajectory as it evolves.
 
-    n_episodes: number of patients to simulate (use full cohort size for best results)
+    This is the "gold standard" evaluation — what actually happens when
+    we deploy this model for a full quarter.
     """
     from environment.reward import compute_stars_score
+    from simulation.world import WorldSimulator
 
-    n_patients = min(n_episodes, len(env.patient_snapshots))
-    sim_days = 90  # Full quarter
+    # Accept either HEDISEnv or raw snapshots
+    if hasattr(env_or_snapshots, 'patient_snapshots'):
+        patient_snapshots = env_or_snapshots.patient_snapshots
+        elig = eligibility_snapshots or [{"patient_id": s["patient_id"], "action_mask": [True] * NUM_ACTIONS}
+                                         for s in patient_snapshots]
+    else:
+        patient_snapshots = env_or_snapshots
+        elig = eligibility_snapshots or []
 
-    # Per-patient tracking
-    measure_patients_with_gap = Counter()
-    measure_patients_closed = Counter()
+    # Sample patients for simulation
+    rng = np.random.default_rng(seed)
+    n_patients = min(n_episodes, len(patient_snapshots))
+    sampled = rng.choice(len(patient_snapshots), size=n_patients, replace=False)
+    sim_snapshots = [patient_snapshots[i] for i in sampled]
+    sim_elig = elig[:n_patients] if elig else []
+
+    # Create a fresh WorldSimulator for this evaluation
+    world = WorldSimulator(sim_snapshots, sim_elig, rng=rng)
+
+    sim_days = 90
     measure_attempts = Counter()
     channel_actions = Counter()
-    channel_closures = Counter()
     no_action_count = 0
     total_actions = 0
-    episode_rewards = []
+    total_reward = 0.0
 
-    # STARS trajectory: snapshot closure rates every 10 days
+    # STARS trajectory: snapshot every 5 days
     stars_trajectory = []
 
-    for ep_idx in range(n_patients):
-        # Override max_steps to 90 for full quarter simulation
-        env.max_steps = sim_days
-        obs, info = env.reset(seed=seed + ep_idx,
-                             options={"patient_idx": ep_idx % len(env.patient_snapshots)})
-        total_reward = 0.0
+    for day in range(1, sim_days + 1):
+        world.day = day
+        daily_actions_count = 0
 
-        initial_gaps = set(info.get("open_gaps", []))
-        for m in initial_gaps:
-            measure_patients_with_gap[m] += 1
-        closed_this_episode = set()
+        for pid in world.patients:
+            try:
+                ctx = world.get_patient_context(pid)
+                state_vec = ctx["state_vec"]
+                mask = ctx["mask"]
 
-        done = False
-        step = 0
-        while not done:
-            state = obs["observations"]
-            mask = obs["action_mask"]
+                if hasattr(agent, "get_action_greedy"):
+                    action = agent.get_action_greedy(state_vec, mask.astype(np.float32))
+                else:
+                    valid = np.where(mask)[0]
+                    action = int(rng.choice(valid)) if len(valid) > 0 else 0
 
-            if hasattr(agent, "get_action_greedy"):
-                action = agent.get_action_greedy(state, mask)
-            else:
-                valid = np.where(mask)[0]
-                action = int(np.random.choice(valid)) if len(valid) > 0 else 0
+                outcome = world.execute_action(pid, action)
+                total_actions += 1
 
-            obs, reward, terminated, truncated, info = env.step(action)
-            total_reward += reward
-            total_actions += 1
-            step += 1
+                if action == 0:
+                    no_action_count += 1
+                else:
+                    act = ACTION_BY_ID.get(action)
+                    if act:
+                        measure_attempts[act.measure] += 1
+                        channel_actions[act.channel] += 1
+                    daily_actions_count += 1
+            except Exception:
+                continue
 
-            if action == 0:
-                no_action_count += 1
-            else:
-                act = ACTION_BY_ID.get(action)
-                if act:
-                    measure_attempts[act.measure] += 1
-                    channel_actions[act.channel] += 1
-                    if info.get("gap_closed"):
-                        closed_this_episode.add(act.measure)
-                        channel_closures[act.channel] += 1
+        # Advance day (process lagged rewards, state machine, rolling windows)
+        day_summary = world.advance_day()
+        closure_reward = day_summary.get("closure_reward", 0)
+        total_reward += closure_reward
 
-            done = terminated or truncated
+        # Snapshot STARS every 5 days
+        if day % 5 == 0 or day == sim_days:
+            gap_closures = day_summary.get("gap_closures", {})
+            total_patients = day_summary.get("total_patients", {})
 
-        for m in closed_this_episode:
-            measure_patients_closed[m] += 1
-        episode_rewards.append(total_reward)
-
-        # Snapshot STARS every 100 patients
-        if (ep_idx + 1) % max(n_patients // 10, 1) == 0:
-            snapshot_rates = {}
+            # Compute cumulative closure rates from the world's metrics tracker
+            # Use the world's own gap closure accumulation
+            closure_rates = {}
             for m in HEDIS_MEASURES:
-                pw = measure_patients_with_gap.get(m, 0)
-                pc = measure_patients_closed.get(m, 0)
-                snapshot_rates[m] = pc / max(pw, 1) if pw > 0 else 0.0
+                # Denominator: initial patients with this gap
+                denom = sum(1 for ps in world.patients.values() if m in ps.snapshot.get("open_gaps", []) or m in ps.snapshot.get("closed_gaps", []))
+                # Numerator: patients who have responded (closure day set)
+                closed = sum(1 for ps in world.patients.values() if ps.last_closure_day > 0 and m in ps.snapshot.get("open_gaps", []))
+                closure_rates[m] = closed / max(denom, 1)
+
+            stars = compute_stars_score(closure_rates)
             stars_trajectory.append({
-                "patients_processed": ep_idx + 1,
-                "stars": compute_stars_score(snapshot_rates),
-                "avg_closure": sum(snapshot_rates.values()) / max(len(snapshot_rates), 1),
+                "day": day,
+                "stars": stars,
+                "avg_closure": sum(closure_rates.values()) / max(len(closure_rates), 1),
+                "daily_actions": daily_actions_count,
+                "daily_closures": sum(gap_closures.values()),
+                "budget_remaining": world.budget_remaining,
             })
 
     # Final closure rates
     sim_closure_rates = {}
     for m in HEDIS_MEASURES:
-        pw = measure_patients_with_gap.get(m, 0)
-        pc = measure_patients_closed.get(m, 0)
-        sim_closure_rates[m] = pc / max(pw, 1) if pw > 0 else 0.0
+        denom = sum(1 for ps in world.patients.values() if m in ps.snapshot.get("open_gaps", []) or m in ps.snapshot.get("closed_gaps", []))
+        closed = sum(1 for ps in world.patients.values() if ps.last_closure_day > 0 and m in ps.snapshot.get("open_gaps", []))
+        sim_closure_rates[m] = closed / max(denom, 1)
 
     sim_channel_rates = {}
     for ch in ["sms", "email", "portal", "app", "ivr"]:
         ch_acts = channel_actions.get(ch, 0)
-        ch_close = channel_closures.get(ch, 0)
-        sim_channel_rates[ch] = ch_close / max(ch_acts, 1) if ch_acts > 0 else 0.0
+        sim_channel_rates[ch] = ch_acts / max(total_actions - no_action_count, 1)
 
     action_dist_by_measure = dict(measure_attempts)
     action_dist_by_channel = dict(channel_actions)
 
-    # Final STARS from the full simulation
     final_stars = compute_stars_score(sim_closure_rates)
 
     return {

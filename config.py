@@ -353,11 +353,11 @@ REWARD_WEIGHTS = {
 # CQL Hyperparameters
 # ---------------------------------------------------------------------------
 CQL_CONFIG = {
-    "min_q_weight": 1.0,     # Reduced from 5.0 — less aggressive conservatism
+    "min_q_weight": 0.5,     # Light conservatism for nightly incremental updates
     "lagrangian": True,
     "bc_iters": 5,
-    "cql_iters": 3,
-    "lr": 3e-4,
+    "cql_iters": 5,
+    "lr": 1e-4,              # Lower LR for stable incremental learning
 }
 
 # ---------------------------------------------------------------------------
