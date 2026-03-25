@@ -213,7 +213,7 @@ def run_nightly_cycle(
                 episodes=training_episodes,
                 agent=challenger,
                 epochs=cql_epochs,
-                batch_size=min(256, max(32, total_transitions // 4)),
+                batch_size=1024,
                 verbose=False,
             )
     except Exception as e:

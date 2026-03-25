@@ -382,7 +382,7 @@ DYNAMICS_MODEL_CONFIG = {
     "hidden_dims": [256, 256],
     "lr": 1e-3,
     "epochs": 3,
-    "batch_size": 256,
+    "batch_size": 1024,
 }
 
 REWARD_MODEL_CONFIG = {
@@ -390,7 +390,7 @@ REWARD_MODEL_CONFIG = {
     "hidden_dims": [128, 64],
     "lr": 1e-3,
     "epochs": 3,
-    "batch_size": 256,
+    "batch_size": 1024,
 }
 
 # ---------------------------------------------------------------------------
