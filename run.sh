@@ -242,7 +242,7 @@ cmd_simulate() {
 
     info "Starting 90-day simulation..."
     python3 -u scripts/run_simulation.py \
-        --days 90 --bc-epochs 30 --cql-epochs 5 --eval-episodes 50 \
+        --days 90 --bc-epochs 5 --cql-epochs 3 --eval-episodes 50 \
         > "$SIMULATION_LOG" 2>&1 &
     echo $! > "$SIMULATION_PID"
 

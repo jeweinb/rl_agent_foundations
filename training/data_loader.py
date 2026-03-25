@@ -95,8 +95,17 @@ def build_offline_episodes(
             # Insert no-action steps between real actions to teach the model
             # that waiting/silence is a valid strategy. Uses the days_since_last_contact
             # to determine how many idle days happened between actions.
-            days_gap = record.get("context", {}).get("days_since_last_contact", 1)
-            idle_days = min(days_gap - 1, 5)  # Cap at 5 to prevent huge episodes
+            # Random no-action gaps mimicking episodic healthcare patterns
+            # ~40% no gap, ~30% short (1-2 days), ~20% medium (3-5), ~10% long (6-10)
+            r = np.random.random()
+            if r < 0.40:
+                idle_days = 0
+            elif r < 0.70:
+                idle_days = np.random.randint(1, 3)
+            elif r < 0.90:
+                idle_days = np.random.randint(3, 6)
+            else:
+                idle_days = np.random.randint(6, 11)
             for _ in range(idle_days):
                 obs_list.append(state_vec.copy())
                 action_list.append(0)  # no_action

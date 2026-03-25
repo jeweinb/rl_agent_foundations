@@ -355,8 +355,8 @@ REWARD_WEIGHTS = {
 CQL_CONFIG = {
     "min_q_weight": 1.0,     # Reduced from 5.0 — less aggressive conservatism
     "lagrangian": True,
-    "bc_iters": 50,
-    "cql_iters": 100,
+    "bc_iters": 5,
+    "cql_iters": 3,
     "lr": 3e-4,
 }
 
@@ -381,7 +381,7 @@ DYNAMICS_MODEL_CONFIG = {
     "action_embed_dim": 32,
     "hidden_dims": [256, 256],
     "lr": 1e-3,
-    "epochs": 50,
+    "epochs": 3,
     "batch_size": 256,
 }
 
@@ -389,7 +389,7 @@ REWARD_MODEL_CONFIG = {
     "action_embed_dim": 32,
     "hidden_dims": [128, 64],
     "lr": 1e-3,
-    "epochs": 50,
+    "epochs": 3,
     "batch_size": 256,
 }
 

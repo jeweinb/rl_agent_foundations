@@ -86,13 +86,13 @@ def run_simulation(
     dynamics_model = train_dynamics_model(
         state_snapshots=datasets["state_features"],
         historical_activity=datasets["historical_activity"],
-        epochs=20, verbose=verbose,
+        epochs=3, verbose=verbose,
     )
     reward_model = train_reward_model(
         state_snapshots=datasets["state_features"],
         historical_activity=datasets["historical_activity"],
         gap_closure=datasets.get("gap_closure"),
-        epochs=20, verbose=verbose,
+        epochs=3, verbose=verbose,
     )
     dynamics_path = os.path.join(CHECKPOINTS_DIR, "dynamics_model.pt")
     reward_path = os.path.join(CHECKPOINTS_DIR, "reward_model.pt")
@@ -108,11 +108,11 @@ def run_simulation(
     log.info(f"BC policy saved to {bc_path}")
 
     # Phase 3: Initial CQL
-    log.phase("Phase 3: Initial CQL Fine-Tuning", epochs=min(cql_epochs, 30))
+    log.phase("Phase 3: Initial CQL Fine-Tuning", epochs=cql_epochs)
     champion = train_cql(
         episodes=episodes,
         bc_policy=bc_policy,
-        epochs=min(cql_epochs, 30),
+        epochs=cql_epochs,
         verbose=verbose,
     )
     champion_path = os.path.join(CHECKPOINTS_DIR, "champion.pt")
