@@ -20,6 +20,7 @@ def compute_action_mask(
     opt_out: bool = False,
     grievance_hold: bool = False,
     budget_remaining: int = None,
+    days_since_last_email: int = 999,
 ) -> np.ndarray:
     """Compute the action mask for a patient.
 
@@ -31,7 +32,8 @@ def compute_action_mask(
         suppressed: Whether patient is under general suppression.
         opt_out: Whether patient has opted out of all communications.
         grievance_hold: Whether patient has an active grievance hold.
-        budget_remaining: Global message budget remaining. 0 = fully exhausted, no more messages for anyone.
+        budget_remaining: Global message budget remaining. 0 = fully exhausted.
+        days_since_last_email: Days since last email was sent to this patient. Email suppressed if < 30.
 
     Returns:
         Boolean numpy array of shape (NUM_ACTIONS,). True = action is valid.
@@ -64,6 +66,11 @@ def compute_action_mask(
 
         # Channel must be available
         if not channel_availability.get(channel, False):
+            continue
+
+        # Email suppression: max 1 email per 30 days
+        from config import MIN_DAYS_BETWEEN_EMAIL
+        if channel == "email" and days_since_last_email < MIN_DAYS_BETWEEN_EMAIL:
             continue
 
         # Cooldown per measure

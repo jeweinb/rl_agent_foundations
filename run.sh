@@ -19,6 +19,39 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# --- Find Python 3.10+ ---
+PYTHON=""
+if [[ -d "$SCRIPT_DIR/.venv" ]]; then
+    # Prefer venv if it exists
+    PYTHON="$SCRIPT_DIR/.venv/bin/python"
+elif command -v python3.12 &>/dev/null; then
+    PYTHON="python3.12"
+elif command -v python3.11 &>/dev/null; then
+    PYTHON="python3.11"
+elif command -v python3.10 &>/dev/null; then
+    PYTHON="python3.10"
+elif command -v python3 &>/dev/null; then
+    PYTHON="python3"
+else
+    echo "ERROR: Python 3.10+ not found. Run ./setup.sh first."
+    exit 1
+fi
+
+# Auto-activate venv if it exists
+if [[ -d "$SCRIPT_DIR/.venv" && -z "${VIRTUAL_ENV:-}" ]]; then
+    source "$SCRIPT_DIR/.venv/bin/activate"
+    PYTHON="python"
+fi
+
+# Quick dep check (only on start/restart/simulate/dashboard)
+if [[ "${1:-start}" =~ ^(start|restart|simulate|dashboard|generate)$ ]]; then
+    if ! "$PYTHON" -c "import torch, dash, gymnasium" 2>/dev/null; then
+        echo -e "\033[0;31m[ERROR]\033[0m Dependencies not installed. Run:"
+        echo -e "  \033[0;32m./setup.sh\033[0m"
+        exit 1
+    fi
+fi
+
 PID_DIR="$SCRIPT_DIR/.pids"
 LOG_DIR="$SCRIPT_DIR/logs"
 DASHBOARD_PID="$PID_DIR/dashboard.pid"
@@ -217,7 +250,7 @@ cmd_simulate() {
 
     info "Starting 90-day simulation..."
     python3 -u scripts/run_simulation.py \
-        --days 90 --bc-epochs 30 --cql-epochs 10 --eval-episodes 50 \
+        --days 90 --bc-epochs 30 --cql-epochs 5 --eval-episodes 50 \
         > "$SIMULATION_LOG" 2>&1 &
     echo $! > "$SIMULATION_PID"
 

@@ -118,6 +118,18 @@ def load_sim_predictions() -> List[Dict[str, Any]]:
         return []
 
 
+def load_training_debug() -> List[Dict[str, Any]]:
+    """Load cumulative training debug metrics."""
+    path = os.path.join(SIMULATION_DATA_DIR, "training_debug.json")
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
 def load_simulation_logs(max_lines: int = 200) -> List[Dict[str, Any]]:
     """Load simulation log entries."""
     path = os.path.join(SIMULATION_DATA_DIR, "simulation_log.jsonl")

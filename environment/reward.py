@@ -51,10 +51,7 @@ def compute_reward(
 
     # Small engagement bonus
     if clicked:
-        reward += w["engagement_click"]
-
-    # Tiny action cost (prevents sending when there's nothing to gain)
-    reward += w["action_cost"]
+        reward += w.get("engagement_click", 0.05)
 
     return reward
 

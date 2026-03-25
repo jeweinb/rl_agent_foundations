@@ -390,39 +390,54 @@ def train_cql(
     agent.actor.train()
     agent.critic.train()
 
+    # Track training metrics for debugging
+    training_history = []
+
     for epoch in range(epochs):
         total_critic_loss = 0.0
         total_actor_loss = 0.0
+        total_td_loss = 0.0
         total_cql = 0.0
         n_batches = 0
+        last_alpha = 0.0
+        last_entropy = 0.0
 
         for batch in dataloader:
             obs_b, act_b, rew_b, next_obs_b, done_b, mask_b, next_mask_b = batch
 
-            # Update critic (TD + CQL)
             critic_info = agent.update_critic(obs_b, act_b, rew_b, next_obs_b, done_b, mask_b, next_mask_b)
-
-            # Update actor
             actor_info = agent.update_actor(obs_b, mask_b)
-
-            # Update entropy coefficient
             alpha_info = agent.update_alpha(obs_b, mask_b)
-
-            # Soft update target
             agent.soft_update_target()
 
             total_critic_loss += critic_info["critic_loss"]
+            total_td_loss += critic_info["td_loss"]
             total_actor_loss += actor_info["actor_loss"]
             total_cql += critic_info["cql_penalty"]
+            last_alpha = alpha_info["alpha"]
+            last_entropy = alpha_info["entropy"]
             n_batches += 1
 
+        epoch_metrics = {
+            "epoch": epoch + 1,
+            "critic_loss": total_critic_loss / max(n_batches, 1),
+            "td_loss": total_td_loss / max(n_batches, 1),
+            "actor_loss": total_actor_loss / max(n_batches, 1),
+            "cql_penalty": total_cql / max(n_batches, 1),
+            "alpha": last_alpha,
+            "entropy": last_entropy,
+        }
+        training_history.append(epoch_metrics)
+
         if verbose and (epoch + 1) % 10 == 0:
-            avg_critic = total_critic_loss / max(n_batches, 1)
-            avg_actor = total_actor_loss / max(n_batches, 1)
-            avg_cql = total_cql / max(n_batches, 1)
-            print(f"  Epoch {epoch + 1}/{epochs} — critic: {avg_critic:.4f}, actor: {avg_actor:.4f}, "
-                  f"cql: {avg_cql:.4f}, alpha: {alpha_info['alpha']:.4f}, entropy: {alpha_info['entropy']:.2f}")
+            print(f"  Epoch {epoch + 1}/{epochs} — critic: {epoch_metrics['critic_loss']:.4f}, "
+                  f"actor: {epoch_metrics['actor_loss']:.4f}, "
+                  f"cql: {epoch_metrics['cql_penalty']:.4f}, "
+                  f"alpha: {last_alpha:.4f}, entropy: {last_entropy:.2f}")
 
     if verbose:
         print("CQL-SAC training complete.")
+
+    # Attach training history to agent for retrieval
+    agent._training_history = training_history
     return agent

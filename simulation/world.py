@@ -35,7 +35,7 @@ class PatientState:
     __slots__ = [
         "pid", "snapshot", "messages_sent", "contact_days",
         "channels_used", "responses", "last_closure_day",
-        "recent_measures",
+        "recent_measures", "last_email_day",
     ]
 
     def __init__(self, pid: str, snapshot: Dict[str, Any]):
@@ -45,6 +45,7 @@ class PatientState:
         self.contact_days: List[int] = []   # Rolling 7-day window
         self.channels_used: Set[str] = set()
         self.responses = 0                   # Clicks/accepts
+        self.last_email_day = -999            # Day last email was sent
         self.last_closure_day = 0
         self.recent_measures: Dict[str, int] = {}  # measure → day last contacted
 
@@ -162,6 +163,7 @@ class WorldSimulator:
             contacts_this_week=ps.contacts_in_window(self.day),
             recent_measures=recent,
             budget_remaining=self.budget_remaining,
+            days_since_last_email=self.day - ps.last_email_day,
         )
 
         return {
@@ -226,6 +228,12 @@ class WorldSimulator:
             is_no_action=False,
         )
 
+        # Channel diversity bonus: reward using channels the patient hasn't seen much
+        from config import REWARD_WEIGHTS
+        channels_used = ps.channels_used if isinstance(ps.channels_used, set) else set()
+        if action_info.channel not in channels_used:
+            reward += REWARD_WEIGHTS.get("channel_diversity", 0.01)
+
         # Update patient state
         self.budget_remaining = max(0, self.budget_remaining - 1)
         self.budget_used += 1
@@ -233,6 +241,8 @@ class WorldSimulator:
         ps.contact_days.append(self.day)
         ps.channels_used.add(action_info.channel)
         ps.recent_measures[action_info.measure] = self.day
+        if action_info.channel == "email":
+            ps.last_email_day = self.day
         self.daily_actions_taken += 1
 
         return {

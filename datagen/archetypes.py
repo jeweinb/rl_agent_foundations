@@ -73,7 +73,7 @@ ARCHETYPES: List[Dict[str, Any]] = [
         "timing_decay": 0.5,         # Very sensitive to over-contact
         "gap_closure_boost": {"screenings": 1.3, "vaccines": 1.6, "chronic": 1.0,
                               "medication_adherence": 1.5, "mental_health": 0.8, "care_coordination": 0.9},
-        "portal_registered": 0.10, "app_installed": 0.05, "sms_consent": 0.95, "email_available": 0.60,
+        "portal_registered": 0.20, "app_installed": 0.10, "sms_consent": 0.95, "email_available": 0.80,
     },
 
     {
@@ -90,7 +90,7 @@ ARCHETYPES: List[Dict[str, Any]] = [
         "timing_decay": 0.4,
         "gap_closure_boost": {"screenings": 0.7, "vaccines": 0.8, "chronic": 0.9,
                               "medication_adherence": 2.2, "mental_health": 0.5, "care_coordination": 0.6},
-        "portal_registered": 0.15, "app_installed": 0.15, "sms_consent": 0.90, "email_available": 0.70,
+        "portal_registered": 0.25, "app_installed": 0.20, "sms_consent": 0.90, "email_available": 0.85,
     },
 
     # =========================================================================
@@ -110,7 +110,7 @@ ARCHETYPES: List[Dict[str, Any]] = [
         "timing_decay": 0.6,         # Hates being contacted too often
         "gap_closure_boost": {"screenings": 1.2, "vaccines": 1.4, "chronic": 1.3,
                               "medication_adherence": 1.0, "mental_health": 1.1, "care_coordination": 1.8},
-        "portal_registered": 0.05, "app_installed": 0.02, "sms_consent": 0.40, "email_available": 0.30,
+        "portal_registered": 0.15, "app_installed": 0.05, "sms_consent": 0.75, "email_available": 0.70,
     },
 
     # =========================================================================
@@ -187,7 +187,7 @@ ARCHETYPES: List[Dict[str, Any]] = [
         "timing_decay": 0.8,         # Very sensitive to over-contact
         "gap_closure_boost": {"screenings": 0.5, "vaccines": 0.6, "chronic": 0.4,
                               "medication_adherence": 0.5, "mental_health": 0.3, "care_coordination": 0.4},
-        "portal_registered": 0.08, "app_installed": 0.03, "sms_consent": 0.50, "email_available": 0.40,
+        "portal_registered": 0.15, "app_installed": 0.08, "sms_consent": 0.70, "email_available": 0.65,
     },
 
     {
@@ -247,7 +247,7 @@ ARCHETYPES: List[Dict[str, Any]] = [
                               "medication_adherence": 1.3, "mental_health": 1.0, "care_coordination": 2.5},
         "trc_m_eligible": 0.80,      # High TRC_M eligibility
         "readmission_risk_boost": 0.25,
-        "portal_registered": 0.15, "app_installed": 0.08, "sms_consent": 0.65, "email_available": 0.55,
+        "portal_registered": 0.20, "app_installed": 0.10, "sms_consent": 0.75, "email_available": 0.70,
     },
 ]
 

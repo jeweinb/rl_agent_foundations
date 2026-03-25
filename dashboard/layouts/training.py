@@ -58,6 +58,26 @@ def create_layout():
             html.Div(id="sim-action-breakdown", style={"maxHeight": "350px", "overflowY": "auto"}),
         ], style={"flex": "none", "marginBottom": "16px"}),
 
+        # Model debugging
+        card([
+            section_title("CQL Training Diagnostics",
+                         "Monitor for training instability: loss divergence, entropy collapse, Q-value explosion"),
+        ], style={"flex": "none", "marginBottom": "16px"}),
+
+        row([
+            card([dcc.Graph(id="debug-losses", style={"height": "300px"},
+                           config={"displayModeBar": False})]),
+            card([dcc.Graph(id="debug-q-values", style={"height": "300px"},
+                           config={"displayModeBar": False})]),
+        ]),
+
+        row([
+            card([dcc.Graph(id="debug-entropy-alpha", style={"height": "300px"},
+                           config={"displayModeBar": False})]),
+            card([dcc.Graph(id="debug-cql-penalty", style={"height": "300px"},
+                           config={"displayModeBar": False})]),
+        ]),
+
         # Promotion history
         card([
             section_title("Model Promotion History"),

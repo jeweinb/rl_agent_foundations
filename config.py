@@ -274,6 +274,7 @@ COHORT_SIZE = 5000
 SIMULATION_DAYS = 90
 MAX_CONTACTS_PER_WEEK = 3  # Business rule: max 3 messages per 7-day rolling window
 MIN_DAYS_BETWEEN_SAME_MEASURE = 7
+MIN_DAYS_BETWEEN_EMAIL = 30  # Email suppression: max 1 email per 30 days
 
 # ---------------------------------------------------------------------------
 # Feature vector index constants (for models that manipulate raw state vectors)
@@ -345,7 +346,7 @@ def compute_global_budget(cohort_size: int) -> int:
 REWARD_WEIGHTS = {
     "gap_closure": 1.0,              # The real objective (×1 or ×3 for weighted measures)
     "engagement_click": 0.05,        # Small bonus for patient engagement
-    "action_cost": -0.002,           # Tiny cost — just enough to prefer no_action over spam
+    "channel_diversity": 0.01,       # Small bonus for using an underutilized channel
 }
 
 # ---------------------------------------------------------------------------

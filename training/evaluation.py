@@ -88,7 +88,7 @@ def evaluate_agent(
 def compare_models(
     champion_metrics: Dict[str, float],
     challenger_metrics: Dict[str, float],
-    improvement_threshold: float = 0.02,
+    improvement_threshold: float = 0.05,
 ) -> Dict[str, Any]:
     """Compare champion and challenger evaluation results.
 

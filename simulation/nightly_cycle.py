@@ -127,23 +127,29 @@ def run_nightly_cycle(
 
     rng = np.random.default_rng(day)
 
-    # --- 1. Today's new experiences ---
+    # --- Build training batch from 3 tiers of experience ---
+    # In production, all of this is one experience store. The tiers are:
+    #   1. TODAY — full batch, freshest signal
+    #   2. RECENT (last 14 days) — has retroactively updated closure rewards
+    #   3. HISTORICAL — sample from older data to prevent catastrophic forgetting
+
+    # Tier 1: Today's experiences (all of them)
     today_experiences = _load_today_experiences(day)
     today_episodes = _experiences_to_episodes(today_experiences, rng)
 
-    # --- 2. Sample historical replay buffer ---
-    historical = _get_historical_episodes()
-    n_replay = max(1, int(len(historical) * history_replay_frac))
-    replay_indices = rng.choice(len(historical), size=min(n_replay, len(historical)), replace=False)
-    replay_episodes = [historical[i] for i in replay_indices]
-
-    # --- 3. Also include recent simulation days (last 3 days) for momentum ---
+    # Tier 2: Recent simulation experiences (last 14 days, all of them)
     recent_experiences = []
-    for recent_day in range(max(1, day - 3), day):
+    for recent_day in range(max(1, day - 14), day):
         recent_experiences.extend(_load_today_experiences(recent_day))
     recent_episodes = _experiences_to_episodes(recent_experiences, rng)
 
-    # Combine: today + recent sim + historical replay
+    # Tier 3: Historical sample (50% of pre-simulation data)
+    historical = _get_historical_episodes()
+    n_replay = max(1, int(len(historical) * 0.50))
+    replay_indices = rng.choice(len(historical), size=min(n_replay, len(historical)), replace=False)
+    replay_episodes = [historical[i] for i in replay_indices]
+
+    # Combine all tiers
     training_episodes = today_episodes + recent_episodes + replay_episodes
     total_transitions = sum(len(ep["obs"]) - 1 for ep in training_episodes if len(ep["obs"]) > 1)
 
@@ -261,6 +267,39 @@ def run_nightly_cycle(
     # Save nightly metrics + simulation predictions
     day_dir = os.path.join(SIMULATION_DATA_DIR, f"day_{day:02d}")
     os.makedirs(day_dir, exist_ok=True)
+    # Extract training debug metrics
+    training_debug = {}
+    if hasattr(challenger, '_training_history') and challenger._training_history:
+        history = challenger._training_history
+        training_debug = {
+            "final_critic_loss": history[-1].get("critic_loss", 0),
+            "final_td_loss": history[-1].get("td_loss", 0),
+            "final_actor_loss": history[-1].get("actor_loss", 0),
+            "final_cql_penalty": history[-1].get("cql_penalty", 0),
+            "final_alpha": history[-1].get("alpha", 0),
+            "final_entropy": history[-1].get("entropy", 0),
+            "loss_history": [
+                {"epoch": h["epoch"], "critic": h["critic_loss"], "td": h["td_loss"],
+                 "actor": h["actor_loss"], "cql": h["cql_penalty"],
+                 "alpha": h["alpha"], "entropy": h["entropy"]}
+                for h in history
+            ],
+        }
+
+    # Compute Q-value stats for debugging
+    try:
+        import torch
+        champion.critic.eval()
+        with torch.no_grad():
+            sample = torch.randn(100, STATE_DIM)
+            q_min = champion.critic.q_min(sample)
+            training_debug["q_mean"] = float(q_min.mean())
+            training_debug["q_std"] = float(q_min.std())
+            training_debug["q_min"] = float(q_min.min())
+            training_debug["q_max"] = float(q_min.max())
+    except Exception:
+        pass
+
     nightly_metrics = {
         "day": day,
         "champion_metrics": champion_metrics,
@@ -269,8 +308,8 @@ def run_nightly_cycle(
         "promoted": promoted,
         "training_transitions": total_transitions,
         "replay_episodes": len(replay_episodes),
-        # Simulation predictions from learned world
         "sim_detail": sim_detail,
+        "training_debug": training_debug,
     }
     with open(os.path.join(day_dir, "nightly_metrics.json"), "w") as f:
         json.dump(nightly_metrics, f, indent=2, default=str)
@@ -288,6 +327,19 @@ def run_nightly_cycle(
     all_predictions.append({"day": day, **sim_detail})
     with open(sim_predictions_path, "w") as f:
         json.dump(all_predictions, f, indent=2, default=str)
+
+    # Save cumulative training debug for dashboard
+    debug_path = os.path.join(SIMULATION_DATA_DIR, "training_debug.json")
+    all_debug = []
+    if os.path.exists(debug_path):
+        try:
+            with open(debug_path) as f:
+                all_debug = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    all_debug.append({"day": day, **training_debug})
+    with open(debug_path, "w") as f:
+        json.dump(all_debug, f, indent=2, default=str)
 
     return {
         "new_champion": new_champion,

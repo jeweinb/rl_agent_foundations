@@ -89,8 +89,22 @@ header "Installing Dependencies"
 info "Upgrading pip..."
 "$PYTHON" -m pip install --upgrade pip -q
 
-info "Installing dependencies from requirements.txt..."
-"$PYTHON" -m pip install -r requirements.txt -q 2>&1 | tail -3
+# Detect OS for platform-specific installs
+OS="$(uname -s)"
+info "Detected OS: $OS"
+
+if [[ "$OS" == "Darwin" ]]; then
+    # macOS — install PyTorch without CUDA (uses MPS on Apple Silicon)
+    info "Installing PyTorch for macOS..."
+    "$PYTHON" -m pip install torch torchvision -q 2>&1 | tail -1
+else
+    # Linux — install CPU-only PyTorch (smaller, no CUDA dependency)
+    info "Installing PyTorch (CPU) for Linux..."
+    "$PYTHON" -m pip install torch --index-url https://download.pytorch.org/whl/cpu -q 2>&1 | tail -1
+fi
+
+info "Installing remaining dependencies..."
+"$PYTHON" -m pip install gymnasium numpy pandas plotly dash scipy scikit-learn flask pytest ruff -q 2>&1 | tail -1
 ok "All dependencies installed"
 
 # ── Verify installation ──

@@ -96,8 +96,8 @@ def build_offline_episodes(
             outcome = record["outcome"]
             measure = record["measure"]
 
-            # Compute reward (matches simplified reward function)
-            reward = REWARD_WEIGHTS["action_cost"]
+            # Compute reward (matches simplified reward function — no action cost)
+            reward = 0.0
             if outcome.get("clicked"):
                 reward += REWARD_WEIGHTS.get("engagement_click", 0.05)
             if outcome.get("gap_closed_within_30d") and measure:

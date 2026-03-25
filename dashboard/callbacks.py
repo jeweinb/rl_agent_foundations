@@ -596,7 +596,11 @@ def register_callbacks(app):
          Output("sim-channel-effectiveness", "figure"),
          Output("sim-stars-projection", "figure"),
          Output("promotion-history-table", "children"),
-         Output("sim-action-breakdown", "children")],
+         Output("sim-action-breakdown", "children"),
+         Output("debug-losses", "figure"),
+         Output("debug-q-values", "figure"),
+         Output("debug-entropy-alpha", "figure"),
+         Output("debug-cql-penalty", "figure")],
         Input("interval-component", "n_intervals"),
     )
     def update_training(_):
@@ -800,7 +804,74 @@ def register_callbacks(app):
         else:
             sim_breakdown = html.P("Waiting for simulation predictions...", style={"color": GRAY_TEXT})
 
-        return cc_fig, mv_fig, sim_summary, act_dist, closure_fig, ch_fig, stars_proj, table, sim_breakdown
+        # --- CQL Training Debug Charts ---
+        from dashboard.data_feed import load_training_debug
+        debug_data = load_training_debug()
+
+        if debug_data and len(debug_data) > 1:
+            debug_days = [d["day"] for d in debug_data]
+
+            # Losses over time
+            losses_fig = go.Figure()
+            losses_fig.add_trace(go.Scatter(
+                x=debug_days, y=[d.get("final_critic_loss", 0) for d in debug_data],
+                mode="lines+markers", name="Critic Loss", line=dict(color="#ef4444", width=2)))
+            losses_fig.add_trace(go.Scatter(
+                x=debug_days, y=[d.get("final_td_loss", 0) for d in debug_data],
+                mode="lines+markers", name="TD Loss", line=dict(color="#f59e0b", width=2)))
+            losses_fig.add_trace(go.Scatter(
+                x=debug_days, y=[d.get("final_actor_loss", 0) for d in debug_data],
+                mode="lines+markers", name="Actor Loss", line=dict(color=NAVY, width=2)))
+            _styled_fig(losses_fig)
+            losses_fig.update_layout(title="Training Losses (should converge)", xaxis_title="Day")
+
+            # Q-values over time
+            q_fig = go.Figure()
+            q_means = [d.get("q_mean", 0) for d in debug_data]
+            q_stds = [d.get("q_std", 0) for d in debug_data]
+            q_fig.add_trace(go.Scatter(
+                x=debug_days, y=q_means, mode="lines+markers", name="Q Mean",
+                line=dict(color=HUMANA_GREEN, width=2)))
+            q_fig.add_trace(go.Scatter(
+                x=debug_days, y=[d.get("q_max", 0) for d in debug_data],
+                mode="lines", name="Q Max", line=dict(color="#94a3b8", dash="dot")))
+            q_fig.add_trace(go.Scatter(
+                x=debug_days, y=[d.get("q_min", 0) for d in debug_data],
+                mode="lines", name="Q Min", line=dict(color="#94a3b8", dash="dot")))
+            _styled_fig(q_fig)
+            q_fig.update_layout(title="Q-Value Distribution (watch for explosion/collapse)", xaxis_title="Day")
+
+            # Entropy + Alpha
+            ent_fig = go.Figure()
+            ent_fig.add_trace(go.Scatter(
+                x=debug_days, y=[d.get("final_entropy", 0) for d in debug_data],
+                mode="lines+markers", name="Policy Entropy", line=dict(color=HUMANA_GREEN, width=2)))
+            ent_fig.add_trace(go.Scatter(
+                x=debug_days, y=[d.get("final_alpha", 0) for d in debug_data],
+                mode="lines+markers", name="Alpha (temp)", line=dict(color=NAVY, width=2), yaxis="y2"))
+            _styled_fig(ent_fig)
+            ent_fig.update_layout(
+                title="Policy Entropy & Temperature (entropy collapse = bad)",
+                xaxis_title="Day",
+                yaxis=dict(title="Entropy"),
+                yaxis2=dict(title="Alpha", side="right", overlaying="y"),
+            )
+
+            # CQL penalty
+            cql_fig = go.Figure()
+            cql_fig.add_trace(go.Scatter(
+                x=debug_days, y=[d.get("final_cql_penalty", 0) for d in debug_data],
+                mode="lines+markers", name="CQL Penalty", line=dict(color="#ef4444", width=2)))
+            _styled_fig(cql_fig)
+            cql_fig.update_layout(title="CQL Conservative Penalty (too high = underestimates, too low = overestimates)",
+                                xaxis_title="Day")
+        else:
+            losses_fig = _empty_fig("Training losses — waiting for data...")
+            q_fig = _empty_fig("Q-values — waiting for data...")
+            ent_fig = _empty_fig("Entropy — waiting for data...")
+            cql_fig = _empty_fig("CQL penalty — waiting for data...")
+
+        return cc_fig, mv_fig, sim_summary, act_dist, closure_fig, ch_fig, stars_proj, table, sim_breakdown, losses_fig, q_fig, ent_fig, cql_fig
 
     # =========================================================================
     # Tab 4: Measure Deep Dive

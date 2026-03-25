@@ -452,15 +452,45 @@ graph TD
 
 ## Reward Function
 
-Simplified for clear learning signal:
+The reward is intentionally simple — gap closure is the dominant signal. Complexity in the reward function causes training instability.
+
+### Immediate Reward (at action time)
 
 ```
-R(s, a) = gap_closure × measure_weight    (1 or 3 for triple-weighted measures)
-         + 0.05 × clicked                  (small engagement bonus)
-         − 0.002                            (tiny action cost to prefer silence over spam)
+If no_action:
+    R = 0
+
+If action sent:
+    R = 0.05 × clicked                     (small engagement bonus from state machine)
+      + 0.01 × channel_is_new_for_patient  (channel diversity bonus)
 ```
 
-No-action = 0 reward. Budget constraint is handled by action masking (global budget exhaustion), not reward penalties.
+The immediate reward is near-zero by design. The real value comes from lagged closure.
+
+### Lagged Closure Reward (days later, when gap closes)
+
+```
+R_closure = 1.0 × measure_weight          (1 for process measures, 3 for outcome measures)
+```
+
+When a gap closure is confirmed (via claims data / state machine COMPLETED), the closure reward is **retroactively added** to the original experience that triggered it. This means:
+
+- Action sent on Day 5 → gap closes on Day 12 → Day 5's experience buffer updated with +1.0 to +3.0 reward
+- The nightly CQL update on Day 12 sees Day 5's experience with the full reward
+- The model learns: "that action on Day 5 led to a +3.0 outcome" even though it was delayed
+
+### How the Model Sees Reward
+
+| What the model sees during training | Reward |
+|--------------------------------------|--------|
+| No-action | 0.0 |
+| Action sent, no closure (yet) | ~0.01 (diversity/click bonus) |
+| Action sent, gap closed (retroactive) | +1.0 to +3.0 |
+| Best case: triple-weighted gap closure with click | +3.05 |
+
+### What's NOT in the Reward
+
+Budget constraints, contact fatigue, suppression rules — these are all handled by **action masking**, not reward penalties. This keeps the reward clean and prevents the model from learning "do nothing is safe" instead of "close gaps."
 
 ## Message Budget
 
