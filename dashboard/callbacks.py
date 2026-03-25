@@ -724,26 +724,28 @@ def register_callbacks(app):
         else:
             ch_fig = _empty_fig("Waiting for simulation predictions...")
 
-        # --- Simulated STARS projection over time ---
-        if sim_preds and len(sim_preds) > 1:
-            from environment.reward import compute_stars_score
-            sim_days = [p["day"] for p in sim_preds]
-            sim_stars = []
-            for p in sim_preds:
-                rates = p.get("sim_closure_rates", {})
-                if rates:
-                    sim_stars.append(compute_stars_score(rates))
-                else:
-                    sim_stars.append(1.0)
+        # --- Simulated STARS projection ---
+        # Shows both: daily improvement of the model AND the latest full-quarter projection
+        if sim_preds and len(sim_preds) > 0:
             stars_proj = go.Figure()
-            stars_proj.add_trace(go.Scatter(x=sim_days, y=sim_stars, mode="lines+markers",
-                                            name="Simulated STARS", line=dict(color=HUMANA_GREEN, width=3)))
+
+            # Line 1: Final STARS score from each nightly full-quarter simulation
+            sim_days_x = [p["day"] for p in sim_preds]
+            final_stars = [p.get("final_stars", 1.0) for p in sim_preds]
+            stars_proj.add_trace(go.Scatter(
+                x=sim_days_x, y=final_stars, mode="lines+markers",
+                name="Projected Quarter STARS", line=dict(color=HUMANA_GREEN, width=3),
+                marker=dict(size=8),
+            ))
+
             stars_proj.add_hline(y=4.0, line_dash="dash", line_color="#ef4444",
                                annotation_text="4★ Bonus")
             _styled_fig(stars_proj)
-            stars_proj.update_layout(title="STARS Score Projection (Learned World)",
-                                   xaxis_title="Day", yaxis_title="Projected STARS",
-                                   yaxis=dict(range=[1, 5]))
+            stars_proj.update_layout(
+                title="Projected STARS After Full 90-Day Quarter (Learned World)",
+                xaxis_title="Training Day", yaxis_title="End-of-Quarter STARS",
+                yaxis=dict(range=[1, 5]),
+            )
         else:
             stars_proj = _empty_fig("STARS projection — waiting for data...")
 

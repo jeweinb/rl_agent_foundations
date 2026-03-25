@@ -92,11 +92,23 @@ def build_offline_episodes(
                 channel_availability=channel_avail,
             )
 
+            # Insert no-action steps between real actions to teach the model
+            # that waiting/silence is a valid strategy. Uses the days_since_last_contact
+            # to determine how many idle days happened between actions.
+            days_gap = record.get("context", {}).get("days_since_last_contact", 1)
+            idle_days = min(days_gap - 1, 5)  # Cap at 5 to prevent huge episodes
+            for _ in range(idle_days):
+                obs_list.append(state_vec.copy())
+                action_list.append(0)  # no_action
+                reward_list.append(0.0)
+                mask_list.append(mask.copy())
+                state_vec += np.random.normal(0, 0.003, STATE_DIM).astype(np.float32)
+
             action_id = record["action_id"]
             outcome = record["outcome"]
             measure = record["measure"]
 
-            # Compute reward (matches simplified reward function — no action cost)
+            # Compute reward
             reward = 0.0
             if outcome.get("clicked"):
                 reward += REWARD_WEIGHTS.get("engagement_click", 0.05)

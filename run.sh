@@ -43,14 +43,6 @@ if [[ -d "$SCRIPT_DIR/.venv" && -z "${VIRTUAL_ENV:-}" ]]; then
     PYTHON="python"
 fi
 
-# Quick dep check (only on start/restart/simulate/dashboard)
-if [[ "${1:-start}" =~ ^(start|restart|simulate|dashboard|generate)$ ]]; then
-    if ! "$PYTHON" -c "import torch, dash, gymnasium" 2>/dev/null; then
-        echo -e "\033[0;31m[ERROR]\033[0m Dependencies not installed. Run:"
-        echo -e "  \033[0;32m./setup.sh\033[0m"
-        exit 1
-    fi
-fi
 
 PID_DIR="$SCRIPT_DIR/.pids"
 LOG_DIR="$SCRIPT_DIR/logs"

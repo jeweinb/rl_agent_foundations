@@ -123,38 +123,48 @@ def compare_models(
 def evaluate_agent_detailed(
     agent,
     env: HEDISEnv,
-    n_episodes: int = 200,
+    n_episodes: int = 1000,
     seed: int = 42,
 ) -> Dict[str, Any]:
-    """Detailed evaluation capturing action distributions, per-measure closures,
-    and channel breakdown for dashboard visualization.
+    """Simulate a full 90-day quarter across the cohort.
 
-    This represents "what the learned world predicts will happen tomorrow."
+    Each patient gets a 90-step episode (one quarter). Tracks STARS trajectory
+    over time so we can see gaps closing and STARS climbing toward 4.0.
+
+    n_episodes: number of patients to simulate (use full cohort size for best results)
     """
-    episode_rewards = []
-    all_actions_taken = []
+    from environment.reward import compute_stars_score
+
+    n_patients = min(n_episodes, len(env.patient_snapshots))
+    sim_days = 90  # Full quarter
+
+    # Per-patient tracking
+    measure_patients_with_gap = Counter()
+    measure_patients_closed = Counter()
     measure_attempts = Counter()
     channel_actions = Counter()
     channel_closures = Counter()
     no_action_count = 0
     total_actions = 0
+    episode_rewards = []
 
-    # Track per-patient per-measure gap closure (for STARS-style rates)
-    measure_patients_with_gap = Counter()   # How many patients had this gap open
-    measure_patients_closed = Counter()     # How many of those closed it
+    # STARS trajectory: snapshot closure rates every 10 days
+    stars_trajectory = []
 
-    for ep_idx in range(n_episodes):
+    for ep_idx in range(n_patients):
+        # Override max_steps to 90 for full quarter simulation
+        env.max_steps = sim_days
         obs, info = env.reset(seed=seed + ep_idx,
                              options={"patient_idx": ep_idx % len(env.patient_snapshots)})
         total_reward = 0.0
 
-        # Track which gaps this patient started with and which closed
         initial_gaps = set(info.get("open_gaps", []))
         for m in initial_gaps:
             measure_patients_with_gap[m] += 1
         closed_this_episode = set()
 
         done = False
+        step = 0
         while not done:
             state = obs["observations"]
             mask = obs["action_mask"]
@@ -168,6 +178,7 @@ def evaluate_agent_detailed(
             obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
             total_actions += 1
+            step += 1
 
             if action == 0:
                 no_action_count += 1
@@ -179,39 +190,44 @@ def evaluate_agent_detailed(
                     if info.get("gap_closed"):
                         closed_this_episode.add(act.measure)
                         channel_closures[act.channel] += 1
-                    all_actions_taken.append({
-                        "measure": act.measure,
-                        "channel": act.channel,
-                        "variant": act.variant,
-                        "gap_closed": info.get("gap_closed", False),
-                    })
 
             done = terminated or truncated
 
-        # Record which gaps closed for this patient
         for m in closed_this_episode:
             measure_patients_closed[m] += 1
-
         episode_rewards.append(total_reward)
 
-    # Build per-measure PATIENT closure rates (matches STARS methodology)
-    # "What fraction of patients with gap X closed it during the evaluation?"
+        # Snapshot STARS every 100 patients
+        if (ep_idx + 1) % max(n_patients // 10, 1) == 0:
+            snapshot_rates = {}
+            for m in HEDIS_MEASURES:
+                pw = measure_patients_with_gap.get(m, 0)
+                pc = measure_patients_closed.get(m, 0)
+                snapshot_rates[m] = pc / max(pw, 1) if pw > 0 else 0.0
+            stars_trajectory.append({
+                "patients_processed": ep_idx + 1,
+                "stars": compute_stars_score(snapshot_rates),
+                "avg_closure": sum(snapshot_rates.values()) / max(len(snapshot_rates), 1),
+            })
+
+    # Final closure rates
     sim_closure_rates = {}
     for m in HEDIS_MEASURES:
-        patients_with = measure_patients_with_gap.get(m, 0)
-        patients_closed = measure_patients_closed.get(m, 0)
-        sim_closure_rates[m] = patients_closed / max(patients_with, 1) if patients_with > 0 else 0.0
+        pw = measure_patients_with_gap.get(m, 0)
+        pc = measure_patients_closed.get(m, 0)
+        sim_closure_rates[m] = pc / max(pw, 1) if pw > 0 else 0.0
 
-    # Build per-channel effectiveness (closures per action on that channel)
     sim_channel_rates = {}
     for ch in ["sms", "email", "portal", "app", "ivr"]:
         ch_acts = channel_actions.get(ch, 0)
         ch_close = channel_closures.get(ch, 0)
         sim_channel_rates[ch] = ch_close / max(ch_acts, 1) if ch_acts > 0 else 0.0
 
-    # Action distribution by measure
     action_dist_by_measure = dict(measure_attempts)
     action_dist_by_channel = dict(channel_actions)
+
+    # Final STARS from the full simulation
+    final_stars = compute_stars_score(sim_closure_rates)
 
     return {
         "mean_reward": float(np.mean(episode_rewards)),
@@ -223,5 +239,8 @@ def evaluate_agent_detailed(
         "sim_channel_rates": sim_channel_rates,
         "action_dist_by_measure": action_dist_by_measure,
         "action_dist_by_channel": action_dist_by_channel,
-        "n_episodes": n_episodes,
+        "n_episodes": n_patients,
+        "sim_days": sim_days,
+        "final_stars": final_stars,
+        "stars_trajectory": stars_trajectory,
     }

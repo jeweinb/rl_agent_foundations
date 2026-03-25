@@ -159,15 +159,18 @@ def run_nightly_cycle(
               f"= {total_transitions} transitions", flush=True)
 
     # --- 4. Online update of world models (dynamics + reward) ---
+    # Same data, same tiers as CQL — world models train side-by-side with the agent.
     from simulation.logger import get_logger
     log = get_logger()
 
     try:
+        import torch
+
         if dynamics_model is not None and total_transitions > 10:
-            import torch
             dynamics_model.train()
-            opt_d = torch.optim.Adam(dynamics_model.parameters(), lr=5e-4)
-            for ep in today_episodes[:50]:
+            opt_d = torch.optim.Adam(dynamics_model.parameters(), lr=3e-4)
+            # Train on ALL episodes (same batch as CQL)
+            for ep in training_episodes:
                 if len(ep["obs"]) < 2:
                     continue
                 states = torch.FloatTensor(ep["obs"][:-1])
@@ -180,17 +183,18 @@ def run_nightly_cycle(
                 opt_d.step()
 
         if reward_model is not None and total_transitions > 10:
-            import torch
             reward_model.train()
-            opt_r = torch.optim.Adam(reward_model.parameters(), lr=5e-4)
-            for ep in today_episodes[:50]:
+            opt_r = torch.optim.Adam(reward_model.parameters(), lr=3e-4)
+            # Train on ALL episodes (same batch as CQL)
+            for ep in training_episodes:
                 if len(ep["obs"]) < 2:
                     continue
                 states = torch.FloatTensor(ep["obs"])
                 actions = torch.LongTensor(ep["actions"])
                 rewards = torch.FloatTensor(ep["rewards"])
+                # Positive reward → gap likely closed
                 labels = (rewards > 0.1).float()
-                days = torch.ones(len(states)) * 7.0
+                days = torch.ones(len(states)) * 30.0  # Train at 30-day horizon
                 opt_r.zero_grad()
                 loss = reward_model.compute_loss(states, actions, days, labels)
                 loss.backward()
@@ -198,7 +202,6 @@ def run_nightly_cycle(
                 opt_r.step()
     except Exception as e:
         log.error(f"World model online update failed: {e}")
-        # Continue — stale models are better than crashing
 
     # --- 5. Clone champion and do quick CQL update ---
     try:
@@ -255,7 +258,10 @@ def run_nightly_cycle(
     # --- 7. Detailed simulation rollout on the learned world ---
     winner = new_champion
     try:
-        sim_detail = evaluate_agent_detailed(winner, env, n_episodes=1000, seed=day * 2000)
+        # 90-day quarter simulation on 1000 patients
+        sim_detail = evaluate_agent_detailed(
+            winner, env, n_episodes=1000, seed=day * 2000,
+        )
     except Exception as e:
         log.error(f"Detailed evaluation failed: {e}")
         sim_detail = {"mean_reward": 0.0, "std_reward": 0.0, "total_actions": 0,

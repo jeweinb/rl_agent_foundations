@@ -137,14 +137,49 @@ class HEDISEnv(gym.Env):
 
         # --- State transition via LEARNED dynamics model ---
         if not no_act and self.dynamics_model is not None:
+            import torch
             action_arr = np.array([action], dtype=np.int64)
             state_arr = self._state_vector.reshape(1, -1)
-            next_state = self.dynamics_model.predict(state_arr, action_arr, add_noise=True)
-            self._state_vector = next_state.flatten().astype(np.float32)
+
+            # Get prediction WITH uncertainty
+            self.dynamics_model.eval()
+            with torch.no_grad():
+                state_t = torch.FloatTensor(state_arr)
+                action_t = torch.LongTensor(action_arr)
+                delta_mean, delta_logvar = self.dynamics_model.forward(state_t, action_t)
+                delta = delta_mean.numpy().flatten()
+                uncertainty = np.exp(0.5 * delta_logvar.numpy().flatten())
+
+            # Apply delta to get next state
+            next_state = self._state_vector + delta.astype(np.float32)
+
+            # OUTPUT MASKING: freeze features that shouldn't change
+            # Demographics (0-5), conditions (14-21) are static — don't let model modify them
+            static_indices = list(range(0, 6)) + list(range(14, 22))
+            for idx in static_indices:
+                next_state[idx] = self._state_vector[idx]
+
+            # UNCERTAINTY PENALTY: penalize high-uncertainty transitions
+            # Clamp predicted deltas where model is unsure (uncertainty > threshold)
+            high_uncertainty = uncertainty > 0.5
+            next_state[high_uncertainty] = self._state_vector[high_uncertainty] + delta[high_uncertainty] * 0.1
+
+            # Store uncertainty for reward penalty
+            self._last_uncertainty = float(np.mean(uncertainty))
+
+            # Clamp to valid ranges
+            next_state = np.clip(next_state, -3.0, 3.0)
+
+            # Binary features stay binary (gap flags, consent flags)
+            binary_indices = list(range(24, 46))  # gaps + channel consent
+            for idx in binary_indices:
+                next_state[idx] = 1.0 if next_state[idx] > 0.5 else 0.0
+
+            self._state_vector = next_state
+
         elif not no_act:
-            # Fallback: small random perturbation
             self._state_vector += self.np_random.normal(0, 0.01, STATE_DIM).astype(np.float32)
-            self._state_vector = np.clip(self._state_vector, -5.0, 5.0)
+            self._state_vector = np.clip(self._state_vector, -3.0, 3.0)
 
         # --- Gap closure prediction via LEARNED reward model ---
         # Each step represents ~1 day. Query the model at a per-step horizon.
@@ -179,6 +214,14 @@ class HEDISEnv(gym.Env):
             gap_closed=gap_closed,
             is_no_action=no_act,
         )
+
+        # Uncertainty penalty: penalize reward when dynamics model is unsure
+        # This prevents the agent from exploiting model errors
+        if not no_act and self.dynamics_model is not None and hasattr(self, '_last_uncertainty'):
+            avg_uncertainty = getattr(self, '_last_uncertainty', 0.0)
+            if avg_uncertainty > 0.3:
+                reward *= max(0.5, 1.0 - avg_uncertainty)  # Scale down reward in uncertain regions
+
         self._episode_reward += reward
 
         # Update tracking
