@@ -274,7 +274,7 @@ COHORT_SIZE = 5000
 SIMULATION_DAYS = 90
 MAX_CONTACTS_PER_WEEK = 3  # Business rule: max 3 messages per 7-day rolling window
 MIN_DAYS_BETWEEN_SAME_MEASURE = 7
-MIN_DAYS_BETWEEN_EMAIL = 30  # Email suppression: max 1 email per 30 days
+MIN_DAYS_BETWEEN_MAIL = 30  # Direct mail suppression: max 1 physical mail per 30 days
 
 # ---------------------------------------------------------------------------
 # Feature vector index constants (for models that manipulate raw state vectors)

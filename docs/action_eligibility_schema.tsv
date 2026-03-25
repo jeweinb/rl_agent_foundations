@@ -15,7 +15,7 @@ suppressed	boolean	no	Patient under general communication suppression.	Care mana
 opt_out	boolean	no	Patient has opted out of all outreach communications.	CRM preference center	True if patient selected "Do Not Contact" preference. Blocks ALL actions except NO_ACTION. Default: false.	false
 grievance_hold	boolean	no	Patient has an active grievance or complaint hold.	Grievance tracking system	True if open grievance filed within 30 days. Blocks all outreach until resolved. Default: false.	false
 budget_remaining	integer	no	Global message budget remaining for the cohort.	Budget tracking system	Total allocated budget minus total messages sent. When 0, only NO_ACTION is valid. Passed at batch level.	102000
-days_since_last_email	integer	no	Days since last email was sent to this patient.	Outreach log	DATEDIFF(today, MAX(send_date WHERE channel='email')). Business rule: MIN_DAYS_BETWEEN_EMAIL = 30. Default: 999 (never emailed).	45
+days_since_last_mail	integer	no	Days since last direct mail (physical mail) was sent to this patient.	Outreach log	DATEDIFF(today, MAX(send_date WHERE channel='mail')). Business rule: MIN_DAYS_BETWEEN_MAIL = 30. Default: 999 (never mailed). NOTE: This applies to physical MAIL only, not email.	45
 
 ---ELIGIBILITY RULES (applied in order)---
 Rule	Condition	Effect	Priority
@@ -24,7 +24,7 @@ Rule	Condition	Effect	Priority
 3. Weekly Contact Limit	contacts_this_week >= MAX_CONTACTS_PER_WEEK (3)	All actions masked except NO_ACTION	High
 4. Gap Must Be Open	action.measure NOT IN open_gaps	That specific action is masked	Medium
 5. Channel Must Be Available	channel_availability[action.channel] = false	Actions on that channel are masked	Medium
-6. Email Suppression	action.channel='email' AND days_since_last_email < 30	Email actions masked for this patient	Medium
+6. Direct Mail Suppression	action.channel='mail' AND days_since_last_mail < 30	Physical mail actions masked for this patient (NOT email)	Medium
 7. Measure Cooldown	recent_measures[action.measure] < MIN_DAYS_BETWEEN_SAME_MEASURE (7)	Actions for that measure masked	Medium
 
 ---HOW TO BUILD THE DATASET---

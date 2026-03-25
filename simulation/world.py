@@ -220,7 +220,7 @@ class WorldSimulator:
             contacts_this_week=ps.contacts_in_window(self.day),
             recent_measures=recent,
             budget_remaining=self.budget_remaining,
-            days_since_last_email=self.day - ps.last_email_day,
+            days_since_last_mail=self.day - getattr(ps, 'last_mail_day', -999),
         )
 
         return {
