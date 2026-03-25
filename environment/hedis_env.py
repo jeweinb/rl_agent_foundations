@@ -77,7 +77,7 @@ class HEDISEnv(gym.Env):
         self._step_count = 0
         self._contacts_this_week = 0
         self._recent_measures: Dict[str, int] = {}
-        self._action_history: List[int] = []
+        self._action_history: List[int] = []  # Kept for mask/tracking, not passed to snapshot_to_vector
         self._open_gaps: set = set()
         self._episode_reward = 0.0
         self._day_of_year = 15
@@ -113,7 +113,6 @@ class HEDISEnv(gym.Env):
         from environment.state_space import snapshot_to_vector
         self._state_vector = snapshot_to_vector(
             self._current_snapshot,
-            action_history=self._action_history,
             day_of_year=self._day_of_year,
             budget_remaining=self._budget_remaining,
             budget_max=self._budget_max,
