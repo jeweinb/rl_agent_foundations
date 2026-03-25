@@ -1,0 +1,39 @@
+Field	Type	Required	Description	Source System	Business Rule	Example
+patient_id	string	yes	Unique member identifier	Enrollment file	Must match member roster	"P10042"
+action_mask	array[bool]	yes	125-element boolean array. action_mask[i] = True means action i is eligible for this patient. Index 0 (NO_ACTION) always True.	Computed from rules below	See eligibility rules	[true, true, false, true, ...]
+open_gaps	array[string]	yes	List of HEDIS measure codes with open gaps. Actions targeting closed gaps are masked out.	Gap closure engine / HEDIS supplemental data	Gap must be identified by HEDIS engine using CMS technical specifications. Refresh daily from claims + supplemental.	["COL", "CBP", "MDS"]
+closed_gaps	array[string]	yes	List of HEDIS measure codes already closed this measurement year.	Gap closure engine	Complement of open_gaps among eligible measures.	["BCS", "FLU", "HBD"]
+channel_availability	object	yes	Per-channel boolean availability for this patient.	CRM + consent management	See channel rules below.	{"sms": true, "email": true, "portal": false, "app": false, "ivr": true}
+channel_availability.sms	boolean	yes	Patient has active SMS consent on file and valid mobile number.	CRM consent table	TCPA consent required. Check: consent_status='ACTIVE' AND mobile_number IS NOT NULL AND mobile_number_valid=true.	true
+channel_availability.email	boolean	yes	Patient has valid, non-bounced email address on file.	CRM contact table	Check: email_status='VALID' AND bounce_count=0 AND email IS NOT NULL.	true
+channel_availability.portal	boolean	yes	Patient has active member portal account.	Portal user database	Check: account_status='ACTIVE' AND last_login within 180 days.	false
+channel_availability.app	boolean	yes	Patient has mobile app installed with push notifications enabled.	App analytics platform	Check: app_installed=true AND push_enabled=true AND app_version >= min_supported_version.	false
+channel_availability.ivr	boolean	yes	IVR channel is always available (phone is universal).	N/A	Always true. IVR uses the primary phone number on file.	true
+contacts_this_week	integer	yes	Number of outreach messages sent to this patient in the rolling 7-day window.	Outreach log	Count messages with send_date >= today - 7 days. Business rule: MAX_CONTACTS_PER_WEEK = 3.	1
+recent_measures	object	no	Map of measure_code -> days since last contact for that measure. Used for cooldown.	Outreach log	For each measure contacted in last 30 days: measure -> DATEDIFF(today, last_send_date). Business rule: MIN_DAYS_BETWEEN_SAME_MEASURE = 7.	{"COL": 3, "CBP": 12}
+suppressed	boolean	no	Patient under general communication suppression.	Care management / compliance	True if patient is in a suppression period (e.g., post-grievance cooling, active care transition, provider request). Default: false.	false
+opt_out	boolean	no	Patient has opted out of all outreach communications.	CRM preference center	True if patient selected "Do Not Contact" preference. Blocks ALL actions except NO_ACTION. Default: false.	false
+grievance_hold	boolean	no	Patient has an active grievance or complaint hold.	Grievance tracking system	True if open grievance filed within 30 days. Blocks all outreach until resolved. Default: false.	false
+budget_remaining	integer	no	Global message budget remaining for the cohort.	Budget tracking system	Total allocated budget minus total messages sent. When 0, only NO_ACTION is valid. Passed at batch level.	102000
+days_since_last_email	integer	no	Days since last email was sent to this patient.	Outreach log	DATEDIFF(today, MAX(send_date WHERE channel='email')). Business rule: MIN_DAYS_BETWEEN_EMAIL = 30. Default: 999 (never emailed).	45
+
+---ELIGIBILITY RULES (applied in order)---
+Rule	Condition	Effect	Priority
+1. Global Blocks	opt_out=true OR grievance_hold=true OR suppressed=true	All actions masked except NO_ACTION (index 0)	Highest
+2. Budget Exhaustion	budget_remaining <= 0	All actions masked except NO_ACTION	High
+3. Weekly Contact Limit	contacts_this_week >= MAX_CONTACTS_PER_WEEK (3)	All actions masked except NO_ACTION	High
+4. Gap Must Be Open	action.measure NOT IN open_gaps	That specific action is masked	Medium
+5. Channel Must Be Available	channel_availability[action.channel] = false	Actions on that channel are masked	Medium
+6. Email Suppression	action.channel='email' AND days_since_last_email < 30	Email actions masked for this patient	Medium
+7. Measure Cooldown	recent_measures[action.measure] < MIN_DAYS_BETWEEN_SAME_MEASURE (7)	Actions for that measure masked	Medium
+
+---HOW TO BUILD THE DATASET---
+Step	Description	SQL/Logic Example
+1. Start with member roster	All active MA members in the cohort.	SELECT patient_id FROM enrollment WHERE plan_active = true AND lob = 'MA'
+2. Run HEDIS gap engine	Identify open/closed gaps per member using CMS technical specifications + supplemental data.	HEDIS engine output: patient_id, measure, gap_status (OPEN/CLOSED)
+3. Pull channel availability	Query CRM for consent status, email validity, portal registration, app install status.	SELECT patient_id, sms_consent, email_valid, portal_active, app_push_enabled FROM crm_contacts
+4. Pull contact history	Count contacts in rolling windows and last contact date per measure.	SELECT patient_id, COUNT(*) as contacts_7d FROM outreach_log WHERE send_date >= DATEADD(day, -7, GETDATE()) GROUP BY patient_id
+5. Check suppression flags	Query grievance system, care management, and preference center.	SELECT patient_id, opt_out, grievance_hold, suppressed FROM member_preferences
+6. Apply masking rules	For each patient, iterate through 125 actions and apply rules 1-7 above to produce the boolean mask.	Python: compute_action_mask(open_gaps, channel_availability, contacts_this_week, recent_measures, ...)
+7. Serialize	Output one record per patient with all fields.	JSON: {"patient_id": "P10042", "action_mask": [true, true, ...], "open_gaps": [...], ...}
+8. Refresh cadence	Rebuild daily before the inference batch run. Gap data from overnight claims refresh. Contact data from real-time outreach log.	Schedule: 4:00 AM ET daily, before 6:00 AM inference batch.

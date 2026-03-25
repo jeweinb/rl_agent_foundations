@@ -1,0 +1,165 @@
+Index	Tier	Category	Feature Name	Description	Normalization	Clinical Definition / Extraction Logic	Source Codes / Systems
+0	Patient	Demographics	age_norm	Patient age at start of measurement year	age / 100	Age = measurement_year_start - date_of_birth. Use member enrollment file DOB.	Enrollment file, MBR_DOB field
+1	Patient	Demographics	sex_male	Male sex indicator	binary (1.0 if M)	Sex from enrollment demographics. M=1, F=0.	Enrollment file, MBR_SEX = 'M'
+2	Patient	Demographics	sex_female	Female sex indicator	binary (1.0 if F)	Sex from enrollment demographics. M=0, F=1.	Enrollment file, MBR_SEX = 'F'
+3	Patient	Demographics	dual_eligible	Medicare-Medicaid dual eligible	binary	Member has both Medicare and Medicaid coverage. Flag from CMS Monthly Membership Report (MMR).	MMR DUAL_STUS_CD != '00'
+4	Patient	Demographics	lis_status	Low-Income Subsidy status	binary	Part D Low-Income Subsidy recipient. Impacts cost-sharing for medication adherence measures.	MMR LIS_FLAG = 'Y'
+5	Patient	Demographics	snp_flag	Special Needs Plan member	binary	Enrolled in a Special Needs Plan (C-SNP, D-SNP, or I-SNP).	Enrollment file, PLAN_TYPE contains 'SNP'
+6	Patient	Clinical Vitals	bp_systolic_norm	Most recent systolic blood pressure	bp / 200	Last recorded systolic BP. Pull from most recent vitals encounter. ICD-10 screening: Z13.6.	CPT: 99213-99215 (office visit with vitals), LOINC: 8480-6
+7	Patient	Clinical Vitals	bp_diastolic_norm	Most recent diastolic blood pressure	bp / 120	Last recorded diastolic BP from same encounter as systolic.	LOINC: 8462-4
+8	Patient	Clinical Vitals	a1c_norm	Most recent hemoglobin A1C value	a1c / 14	Last HbA1c lab result. Look back 12 months. <8.0 = controlled for HBD measure.	CPT: 83036, LOINC: 4548-4, 17856-6
+9	Patient	Clinical Vitals	bmi_norm	Body mass index	bmi / 55	Last recorded BMI from vitals or calculated from height/weight.	LOINC: 39156-5
+10	Patient	Clinical Vitals	ckd_stage_norm	Chronic kidney disease stage (0-5)	stage / 5	CKD stage from problem list or eGFR lab. Stage 0=no CKD.	ICD-10: N18.1-N18.6, LOINC eGFR: 48642-3
+11	Patient	Clinical Vitals	phq9_norm	PHQ-9 depression screening score	score / 27	Most recent PHQ-9 score. 0-27 scale. >=10 indicates moderate depression.	LOINC: 44249-1, CPT: 96127
+12	Patient	Conditions	cond_diabetes	Has diabetes diagnosis	binary	Active diagnosis on problem list or 2+ claims with DM ICD-10 in 24 months.	ICD-10: E10.x, E11.x, E13.x
+13	Patient	Conditions	cond_hypertension	Has hypertension diagnosis	binary	Active diagnosis. Essential hypertension or hypertensive heart disease.	ICD-10: I10, I11.x, I12.x, I13.x
+14	Patient	Conditions	cond_hyperlipidemia	Has hyperlipidemia diagnosis	binary	Active diagnosis. Pure hypercholesterolemia, mixed, or unspecified.	ICD-10: E78.0, E78.1, E78.2, E78.5
+15	Patient	Conditions	cond_depression	Has depression diagnosis	binary	Active diagnosis. Major depressive disorder, persistent depressive disorder.	ICD-10: F32.x, F33.x, F34.1
+16	Patient	Conditions	cond_ckd	Has chronic kidney disease	binary	Active CKD diagnosis stage 1-5 or ESRD.	ICD-10: N18.1-N18.6, N18.9
+17	Patient	Conditions	cond_chd	Has coronary heart disease	binary	Active CHD/CAD/IHD. Atherosclerotic heart disease, angina, prior MI.	ICD-10: I25.x, I20.x, I21.x
+18	Patient	Conditions	cond_copd	Has COPD	binary	Active chronic obstructive pulmonary disease.	ICD-10: J44.x, J43.x
+19	Patient	Conditions	cond_chf	Has congestive heart failure	binary	Active heart failure diagnosis.	ICD-10: I50.x
+20	Patient	Medications	fill_statin	Statin proportion of days covered (PDC)	0.0-1.0	PDC = days supply covered / days in measurement period. Pull from Part D PDE claims. Adherent >= 0.80.	NDC class: HMG-CoA reductase inhibitors (statins). GPI: 3940xx
+21	Patient	Medications	fill_ace_arb	ACE inhibitor / ARB PDC	0.0-1.0	PDC for ACE/ARB class. Relevant for MRA measure.	NDC class: ACE inhibitors, ARBs. GPI: 3610xx, 3615xx
+22	Patient	Medications	fill_diabetes_oral	Oral diabetes medication PDC	0.0-1.0	PDC for oral antidiabetic agents. Includes metformin, sulfonylureas, DPP-4i, SGLT2i, etc.	NDC class: Oral hypoglycemics. GPI: 2710xx-2799xx
+23	Patient	Medications	fill_antidepressant	Antidepressant PDC	0.0-1.0	PDC for antidepressant medications. SSRIs, SNRIs, tricyclics, etc.	NDC class: Antidepressants. GPI: 5810xx-5818xx
+24	Patient	Gap Flags	gap_COL	Colorectal Cancer Screening gap open	binary	No colonoscopy in 10yr, FIT in 1yr, or Cologuard in 3yr for age 45-75.	CPT: 45378, 45380, 45385 (colonoscopy); 82270, 82274 (FIT); 81528 (Cologuard)
+25	Patient	Gap Flags	gap_BCS	Breast Cancer Screening gap open	binary	No mammogram in 2 years for females age 50-74.	CPT: 77067, 77066, 77065; ICD-10: Z12.31
+26	Patient	Gap Flags	gap_EED	Eye Exam for Diabetes gap open	binary	No retinal eye exam in measurement year for patients with diabetes.	CPT: 92002-92014, 67228; ICD-10: Z01.00, Z01.01
+27	Patient	Gap Flags	gap_FVA	Adult Immunization - Tdap gap open	binary	No Tdap/Td vaccination on record per ACIP schedule.	CPT: 90715 (Tdap), 90714 (Td); CVX: 115, 138
+28	Patient	Gap Flags	gap_FVO	Pneumococcal Vaccination gap open	binary	No PCV20 or PCV15+PPSV23 per ACIP for age 65+.	CPT: 90671 (PCV20), 90677 (PCV15), 90732 (PPSV23); CVX: 216, 215, 33
+29	Patient	Gap Flags	gap_AIS	Adult Immunization - Zoster gap open	binary	No Shingrix (recombinant zoster) for age 50+.	CPT: 90750; CVX: 187
+30	Patient	Gap Flags	gap_FLU	Influenza Vaccination gap open	binary	No flu vaccine in current flu season (Aug 1 - Mar 31).	CPT: 90686, 90688, 90756; CVX: 197, 205
+31	Patient	Gap Flags	gap_CBP	Controlling Blood Pressure gap open	binary	Most recent BP not at goal (<140/90) for patients with hypertension.	CPT: 99213-99215 + BP vitals; HEDIS CBP value set
+32	Patient	Gap Flags	gap_BPD	BP Control for Diabetes gap open	binary	Most recent BP not at goal (<140/90) for patients with diabetes.	Same as CBP but denominator requires diabetes dx
+33	Patient	Gap Flags	gap_HBD	Hemoglobin A1C Control gap open	binary	Most recent A1C >= 8.0 for patients with diabetes.	CPT: 83036; result >= 8.0%
+34	Patient	Gap Flags	gap_KED	Kidney Disease Evaluation gap open	binary	No eGFR and uACR test in measurement year for diabetes patients.	CPT: 82043 (uACR), 82565 (creatinine/eGFR); LOINC: 48642-3, 14959-1
+35	Patient	Gap Flags	gap_MAC	Statin Therapy Cholesterol gap open	binary	Statin PDC < 80% for patients with cardiovascular disease.	PDE claims, statin NDCs, PDC calculation
+36	Patient	Gap Flags	gap_MRA	RAS Antagonist Adherence gap open	binary	ACE/ARB PDC < 80% for patients with diabetes + hypertension.	PDE claims, ACE/ARB NDCs, PDC calculation
+37	Patient	Gap Flags	gap_MDS	Diabetes Statin Adherence gap open	binary	Statin PDC < 80% for patients with diabetes age 40-75.	PDE claims, statin NDCs, PDC calculation
+38	Patient	Gap Flags	gap_DSF	Depression Screening Follow-Up gap open	binary	No follow-up within 30 days of positive depression screen.	CPT: 99213-99215 with Z13.89; follow-up: 90791, 90834, 90837
+39	Patient	Gap Flags	gap_DRR	Depression Remission gap open	binary	PHQ-9 not below 5 within 12 months of depression dx.	LOINC: 44249-1, result >= 5
+40	Patient	Gap Flags	gap_DMC02	Antidepressant Medication Management gap open	binary	Antidepressant PDC < 80% in acute/continuation phase.	PDE claims, antidepressant NDCs, 84-day acute / 180-day continuation
+41	Patient	Gap Flags	gap_TRC_M	Transitions of Care gap open	binary	No medication reconciliation within 30 days of hospital discharge.	CPT: 99495, 99496 (TCM); discharged within 30 days
+42	Patient	Risk Scores	readmission_risk	30-day hospital readmission risk	0.0-1.0	Predictive model score. Train on historical admissions. Features: prior admits, LOS, comorbidity index.	HCC risk model, CMS readmission flags
+43	Patient	Risk Scores	disenrollment_risk	Voluntary disenrollment probability	0.0-1.0	Predictive model. Features: satisfaction surveys, grievances, plan tenure, benefit changes.	CMS TRR data, enrollment history
+44	Patient	Risk Scores	non_compliance_risk	Non-compliance probability	0.0-1.0	Predictive model. Features: PDC history, missed appts, ED visits for chronic conditions.	Claims history, pharmacy data
+45	Patient	Risk Scores	composite_acuity_norm	Clinical acuity composite score	acuity / 5	Weighted sum: HCC risk score + ED visits(6mo) + IP admits(12mo) + chronic count. Scale 0-5.	CMS HCC risk score, utilization claims
+46	Patient	Channel Availability	sms_consent	SMS consent on file	binary	Member has opt-in SMS consent in CRM. Check consent table, must not be revoked.	CRM consent table, CHANNEL='SMS', STATUS='ACTIVE'
+47	Patient	Channel Availability	email_available	Valid email address on file	binary	Non-bounced email in contact database. Validated within 90 days.	CRM contact table, EMAIL_STATUS='VALID'
+48	Patient	Channel Availability	portal_registered	Registered on member portal	binary	Member has active portal account with login in last 180 days.	Portal user table, LAST_LOGIN within 180d
+49	Patient	Channel Availability	app_installed	Mobile app installed	binary	Member has app installed with push notifications enabled.	App analytics, PUSH_ENABLED='Y'
+50	Patient	Measure Clinical - COL	mcl_COL_age_over_50	Age >= 50 (screening age threshold)	binary	Derived: demographics.age >= 50. CMS COL eligible starting age 45, but higher priority at 50+.	Derived from age
+51	Patient	Measure Clinical - COL	mcl_COL_prior_colonoscopy	Prior colonoscopy on record	binary	Any colonoscopy claim in last 10 years. If yes, gap may still be open if >10yr ago.	CPT: 45378, 45380, 45385 within 10yr lookback
+52	Patient	Measure Clinical - BCS	mcl_BCS_sex_female	Patient is female	binary	Derived: demographics.sex == 'F'. BCS only applies to females.	Derived from sex
+53	Patient	Measure Clinical - BCS	mcl_BCS_prior_mammogram	Prior mammogram on record	binary	Any mammogram claim in last 2 years.	CPT: 77067, 77066 within 2yr lookback
+54	Patient	Measure Clinical - EED	mcl_EED_has_diabetes	Has diabetes (eye exam eligible)	binary	Derived: conditions.diabetes == True. EED requires diabetes diagnosis.	Derived from conditions
+55	Patient	Measure Clinical - EED	mcl_EED_years_since_eye_exam_norm	Years since last retinal eye exam	years / 3	Count years since last eye exam claim. 0=this year, 3+=very overdue.	CPT: 92002-92014, 67228; last claim date
+56	Patient	Measure Clinical - FVA	mcl_FVA_age_over_65	Age >= 65 (higher priority for vaccines)	binary	Derived: demographics.age >= 65. Older adults at higher risk.	Derived from age
+57	Patient	Measure Clinical - FVA	mcl_FVA_prior_flu_vaccine	Received flu vaccine last season	binary	Any flu vaccine claim in prior flu season (Aug-Mar).	CPT: 90686, 90688; CVX: 197, 205 in prior season
+58	Patient	Measure Clinical - FVO	mcl_FVO_chronic_condition_count_norm	Number of chronic conditions	count / 8	Count of active conditions from the 8 condition flags. More conditions = higher priority.	Derived: sum of condition flags
+59	Patient	Measure Clinical - FVO	mcl_FVO_prior_flu_vaccine	Received flu vaccine last season	binary	Same as FVA prior flu vaccine.	Same as FVA
+60	Patient	Measure Clinical - AIS	mcl_AIS_age_over_65	Age >= 65 (zoster vaccine eligible)	binary	Derived: demographics.age >= 65. Shingrix recommended 50+ but higher priority 65+.	Derived from age
+61	Patient	Measure Clinical - AIS	mcl_AIS_prior_pneumo_vaccine	Prior pneumococcal vaccine on record	binary	Any PCV or PPSV23 claim on record.	CPT: 90671, 90677, 90732; CVX: 216, 215, 33
+62	Patient	Measure Clinical - FLU	mcl_FLU_immunocompromised	Immunocompromised status	binary	Active immunocompromising condition: HIV, transplant, chemo, immunosuppressants.	ICD-10: B20, Z94.x, Z51.1x; NDC: immunosuppressant drugs
+63	Patient	Measure Clinical - FLU	mcl_FLU_prior_flu_vaccine	Received flu vaccine last season	binary	Same as FVA prior flu vaccine.	Same as FVA
+64	Patient	Measure Clinical - CBP	mcl_CBP_has_hypertension	Has hypertension diagnosis	binary	Derived: conditions.hypertension == True. CBP denominator requires HTN dx.	Derived from conditions
+65	Patient	Measure Clinical - CBP	mcl_CBP_bp_controlled	Blood pressure currently controlled	binary	Derived: bp_systolic < 140. Indicates whether gap is close to closing.	Derived from clinical.bp_systolic_last
+66	Patient	Measure Clinical - BPD	mcl_BPD_has_diabetes_and_hypertension	Has both diabetes and hypertension	binary	Derived: conditions.diabetes AND conditions.hypertension. BPD denominator.	Derived from conditions
+67	Patient	Measure Clinical - BPD	mcl_BPD_bp_controlled	Blood pressure currently controlled	binary	Same as CBP bp_controlled.	Derived from clinical.bp_systolic_last
+68	Patient	Measure Clinical - HBD	mcl_HBD_has_diabetes	Has diabetes diagnosis	binary	Derived: conditions.diabetes == True. HBD denominator.	Derived from conditions
+69	Patient	Measure Clinical - HBD	mcl_HBD_a1c_controlled	A1C currently controlled (<8.0)	binary	Derived: clinical.a1c_last < 8.0. Indicates how close to closing gap.	Derived from clinical.a1c_last
+70	Patient	Measure Clinical - KED	mcl_KED_has_ckd	Has chronic kidney disease	binary	Derived: conditions.ckd == True.	Derived from conditions
+71	Patient	Measure Clinical - KED	mcl_KED_has_diabetes	Has diabetes (KED requires DM)	binary	Derived: conditions.diabetes == True. KED denominator requires diabetes.	Derived from conditions
+72	Patient	Measure Clinical - MAC	mcl_MAC_has_cardiovascular	Has CHD or hyperlipidemia	binary	Derived: max(conditions.chd, conditions.hyperlipidemia). MAC denominator.	Derived from conditions
+73	Patient	Measure Clinical - MAC	mcl_MAC_statin_adherent	Statin PDC >= 80%	binary	Derived: medication_fill_rates.statin >= 0.80. Gap closes when adherent.	Derived from medication PDC
+74	Patient	Measure Clinical - MRA	mcl_MRA_has_diabetes_and_hypertension	Has diabetes + hypertension	binary	Derived: min(conditions.diabetes, conditions.hypertension). MRA denominator.	Derived from conditions
+75	Patient	Measure Clinical - MRA	mcl_MRA_ras_adherent	ACE/ARB PDC >= 80%	binary	Derived: medication_fill_rates.ace_arb >= 0.80. Gap closes when adherent.	Derived from medication PDC
+76	Patient	Measure Clinical - MDS	mcl_MDS_has_diabetes_and_hyperlipidemia	Has diabetes + hyperlipidemia	binary	Derived: min(conditions.diabetes, conditions.hyperlipidemia). MDS denominator.	Derived from conditions
+77	Patient	Measure Clinical - MDS	mcl_MDS_statin_adherent	Statin PDC >= 80%	binary	Derived: medication_fill_rates.statin >= 0.80. Gap closes when adherent.	Derived from medication PDC
+78	Patient	Measure Clinical - DSF	mcl_DSF_has_depression	Has depression diagnosis	binary	Derived: conditions.depression == True.	Derived from conditions
+79	Patient	Measure Clinical - DSF	mcl_DSF_prior_mh_followup	Prior mental health follow-up visit	binary	Any behavioral health visit in last 90 days. Indicates patient engagement with MH services.	CPT: 90791, 90834, 90837, 90847 within 90d
+80	Patient	Measure Clinical - DRR	mcl_DRR_has_depression	Has depression diagnosis	binary	Derived: conditions.depression == True.	Derived from conditions
+81	Patient	Measure Clinical - DRR	mcl_DRR_on_antidepressant	Currently taking antidepressant	binary	Derived: medication_fill_rates.antidepressant > 0. Active fills indicate treatment.	Derived from medication PDC
+82	Patient	Measure Clinical - DMC02	mcl_DMC02_has_diabetes	Has diabetes (eye monitoring eligible)	binary	Derived: conditions.diabetes == True.	Derived from conditions
+83	Patient	Measure Clinical - DMC02	mcl_DMC02_years_since_eye_exam_norm	Years since last eye exam	years / 3	Same as EED years_since_eye_exam.	Same as EED
+84	Patient	Measure Clinical - TRC_M	mcl_TRC_M_recent_discharge	Hospital discharge in last 30 days	binary	Any inpatient discharge within 30 days. Check IP claims with discharge date.	UB-04 claim type 11x, DSCHRG_DT within 30d
+85	Patient	Measure Clinical - TRC_M	mcl_TRC_M_has_pcp	Has primary care provider assigned	binary	Active PCP assignment in member roster. Critical for transitions of care.	Provider roster, PCP_NPI is not null
+86	System	Budget	budget_remaining_norm	Global budget pool remaining fraction	remaining / total	Total remaining message budget / total allocated. Allocated = AVG_MESSAGES_PER_PATIENT * cohort_size.	Outreach platform message counter
+87	System	Budget	budget_utilization	Fraction of global budget consumed	1 - remaining/total	1 minus budget_remaining_norm. Indicates overall program spend.	Derived from budget_remaining
+88	System	Budget	budget_is_warning	Budget below 25% warning	binary	1.0 if budget_remaining_norm < 0.25. Signal to be more selective.	Derived from budget_remaining
+89	System	Budget	budget_is_critical	Budget below 10% critical	binary	1.0 if budget_remaining_norm < 0.10. Signal to severely restrict outreach.	Derived from budget_remaining
+90	System	Budget	budget_burn_rate_norm	Daily spend rate vs expected	daily_spend / daily_budget / 3	Daily average = total_used / days_elapsed. Compare to budget/365. >1 = overspending.	Derived: sum(daily_actions) / day_count
+91	System	Budget	budget_projected_days_left	Days until budget exhaustion	projected / 365	At current burn rate, how many days until budget runs out. budget_remaining / daily_spend / 365.	Derived from burn rate
+92	System	Temporal	day_of_year_sin	Sine encoding of calendar day	sin(2pi*day/365)	Cyclical encoding of measurement year day (1-365). Captures seasonality.	System clock / simulation day
+93	System	Temporal	day_of_year_cos	Cosine encoding of calendar day	cos(2pi*day/365)	Second component of cyclical encoding.	System clock / simulation day
+94	System	Temporal	measurement_year_progress	Fraction of year elapsed	day / 365	Linear progress through measurement year. 0.0 = Jan 1, 1.0 = Dec 31. Captures urgency.	System clock / simulation day
+95	System	Population	cohort_size_norm	Total patients in active cohort	size / 10000	Count of currently enrolled MA members in the cohort. Normalize by 10K.	Enrollment file, active members count
+96	System	Population	cohort_avg_messages_norm	Average messages sent per patient	avg_msgs / expected / 3	Mean messages across all patients divided by expected per-patient budget. >1 = above plan.	Outreach platform: SUM(messages) / COUNT(patients)
+97	System	STARS Progress	overall_stars_norm	Current STARS score	score / 5.0	Weighted average of per-measure star ratings using CMS weights. Compute from closure rates.	Computed: measure_closure_rates -> star_ratings -> weighted_avg
+98	System	STARS Progress	stars_7d_trend	STARS change over 7 days	clipped [-1, 1]	current_stars - stars_7_days_ago. Positive = improving. Store daily STARS in metrics table.	Metrics table: stars_score[today] - stars_score[today-7]
+99	System	STARS Progress	pct_measures_above_4star	Fraction of measures >= 4 stars	0.0-1.0	Count measures with individual star rating >= 4.0 / total measures.	Computed from per-measure star ratings
+100	System	STARS Progress	lowest_measure_stars_norm	Worst measure star rating	stars / 5.0	Min star rating across all 18 measures. Identifies bottleneck.	Computed: min(measure_star_ratings)
+101	System	Cohort Channel	cohort_sms_acceptance_rate	Cohort-wide SMS acceptance rate	0.0-1.0	Over last 30 days: SMS actions reaching ACCEPTED or COMPLETED state / total SMS actions sent.	State machine: COUNT(sms, state IN (ACCEPTED,COMPLETED)) / COUNT(sms, all)
+102	System	Cohort Channel	cohort_email_acceptance_rate	Cohort-wide email acceptance rate	0.0-1.0	Same calculation for email channel.	State machine: email channel
+103	System	Cohort Channel	cohort_portal_acceptance_rate	Cohort-wide portal acceptance rate	0.0-1.0	Same calculation for portal channel.	State machine: portal channel
+104	System	Cohort Channel	cohort_app_acceptance_rate	Cohort-wide app acceptance rate	0.0-1.0	Same calculation for app channel.	State machine: app channel
+105	System	Cohort Channel	cohort_ivr_acceptance_rate	Cohort-wide IVR acceptance rate	0.0-1.0	Same calculation for IVR channel.	State machine: IVR channel
+106	Action	Contact History	patient_messages_received_norm	Total messages this patient received	msgs / expected / 3	Count all outreach messages sent to this patient in current quarter. Normalize by expected per-patient.	Outreach platform: COUNT(messages WHERE patient_id = X)
+107	Action	Contact History	patient_messages_vs_cohort	This patient vs cohort average	patient_msgs / cohort_avg / 3	Ratio of this patient's message count to cohort average. >1 = getting more than average attention.	Derived: patient_count / cohort_avg
+108	Action	Contact History	patient_contacts_7d	Contacts in rolling 7-day window	count / MAX_CONTACTS_PER_WEEK	Count messages sent to this patient in last 7 calendar days. Used for suppression logic.	Outreach log: COUNT(messages WHERE patient_id=X AND date >= today-7)
+109	Action	Contact History	patient_contacts_14d	Contacts in rolling 14-day window	count / (2 * max)	Count messages in last 14 days. Captures medium-term contact fatigue.	Outreach log: COUNT(messages WHERE date >= today-14)
+110	Action	Contact History	patient_contacts_30d	Contacts in rolling 30-day window	count / (4 * max)	Count messages in last 30 days. Captures monthly contact saturation.	Outreach log: COUNT(messages WHERE date >= today-30)
+111	Action	Contact History	patient_days_since_last_contact	Days since last outreach	days / 90	Calendar days since the most recent message was sent. Capped at 90.	Outreach log: DATEDIFF(today, MAX(send_date))
+112	Action	Contact History	patient_overall_response_rate	Overall click/accept rate	0.0-1.0	Total patient engagements (clicked, accepted, completed) / total messages sent. All channels combined.	State machine: COUNT(ACCEPTED+COMPLETED) / COUNT(all) for this patient
+113	Action	Contact History	patient_channel_diversity	Distinct channels used	channels / 5	Count of distinct channels (sms, email, portal, app, ivr) used for this patient. Divided by 5.	Outreach log: COUNT(DISTINCT channel WHERE patient_id = X)
+114	Action	Patient Channel Success	patient_sms_success_rate	SMS success rate for this patient	0.0-1.0	Patient-specific: SMS messages reaching ACCEPTED/COMPLETED / total SMS sent to this patient.	State machine filtered by patient_id + channel='sms'
+115	Action	Patient Channel Success	patient_email_success_rate	Email success rate for this patient	0.0-1.0	Same for email.	State machine filtered by channel='email'
+116	Action	Patient Channel Success	patient_portal_success_rate	Portal success rate for this patient	0.0-1.0	Same for portal.	State machine filtered by channel='portal'
+117	Action	Patient Channel Success	patient_app_success_rate	App success rate for this patient	0.0-1.0	Same for app.	State machine filtered by channel='app'
+118	Action	Patient Channel Success	patient_ivr_success_rate	IVR success rate for this patient	0.0-1.0	Same for IVR.	State machine filtered by channel='ivr'
+119	Action	Engagement Rates	sms_response_rate	Historical SMS response rate	0.0-1.0	Baseline SMS engagement from historical data (pre-simulation). Updated during simulation.	Historical engagement table or snapshot.engagement
+120	Action	Engagement Rates	email_open_rate	Historical email open rate	0.0-1.0	Baseline email open rate from historical tracking pixel data.	Email platform open tracking
+121	Action	Engagement Rates	portal_engagement_rate	Historical portal engagement	0.0-1.0	Baseline portal click-through/action rate from portal analytics.	Portal analytics platform
+122	Action	Engagement Rates	app_engagement_rate	Historical app engagement	0.0-1.0	Baseline app interaction rate from mobile analytics.	App analytics (Firebase, etc.)
+123	Action	Engagement Rates	ivr_completion_rate	Historical IVR completion rate	0.0-1.0	Baseline IVR call completion (not hung up) rate.	IVR platform call records
+124	Action	Gap Context	num_open_gaps_norm	Number of open HEDIS gaps	count / 18	Count of currently open gaps for this patient. More gaps = more opportunity.	Gap closure engine: COUNT(open gaps)
+125	Action	Gap Context	avg_gap_age_norm	Average age of open gaps	age / 365	Mean days since each open gap was first identified. Older gaps may be harder to close.	Gap closure engine: AVG(DATEDIFF(today, gap_open_date))
+126	Action	Gap Context	days_since_last_closure	Days since any gap closed	days / 90	Days since this patient's most recent gap closure. 90 = no recent closures.	Gap closure engine: DATEDIFF(today, MAX(closure_date))
+127	Action	Gap Context	highest_priority_gap_weight	CMS weight of top open gap	weight / 3	Max MEASURE_WEIGHTS value among open gaps. 3=outcome measure, 1=process measure.	Derived: MAX(MEASURE_WEIGHTS[g] for g in open_gaps)
+128	Action	Gap Context	num_closed_gaps_norm	Number of closed gaps	count / 18	Gaps already closed this measurement year. Indicates overall patient engagement.	Gap closure engine: COUNT(closed gaps)
+129	Action	Pending Actions	num_pending_actions_norm	Actions currently in-flight	count / 5	Count of actions in non-terminal state machine states (CREATED, QUEUED, PRESENTED, VIEWED).	State machine: COUNT(WHERE patient_id=X AND state NOT IN terminal_states)
+130	Action	Pending Actions	num_in_flight_measures	Distinct measures with pending actions	count / 18	Count distinct measures among pending actions. Avoids re-targeting same measure.	State machine: COUNT(DISTINCT measure WHERE pending)
+131	Action	Pending Actions	has_action_in_flight	Any action in-flight flag	binary	1.0 if num_pending_actions > 0. Quick check for active outreach.	Derived from num_pending_actions
+132	Action	Action History	last_action_0_measure	Most recent action: measure index	idx / 18	Measure index of the most recently sent action. 0-17 mapped to HEDIS_MEASURES order.	Outreach log: most recent action's measure
+133	Action	Action History	last_action_0_channel	Most recent action: channel index	idx / 5	Channel index: 0=sms, 1=email, 2=portal, 3=app, 4=ivr.	Outreach log: most recent action's channel
+134	Action	Action History	last_action_1_measure	2nd recent action: measure	idx / 18	Same as above for 2nd most recent action.	Outreach log
+135	Action	Action History	last_action_1_channel	2nd recent action: channel	idx / 5	Channel of 2nd most recent action.	Outreach log
+136	Action	Action History	last_action_2_measure	3rd recent action: measure	idx / 18	3rd most recent.	Outreach log
+137	Action	Action History	last_action_2_channel	3rd recent action: channel	idx / 5	3rd most recent.	Outreach log
+138	Action	Action History	last_action_3_measure	4th recent action: measure	idx / 18	4th most recent.	Outreach log
+139	Action	Action History	last_action_3_channel	4th recent action: channel	idx / 5	4th most recent.	Outreach log
+140	Action	Action History	last_action_4_measure	5th recent action: measure	idx / 18	5th most recent.	Outreach log
+141	Action	Action History	last_action_4_channel	5th recent action: channel	idx / 5	5th most recent.	Outreach log
+142	Action	Gap-Specific	gap_0_days_since_attempt	Top gap: days since last attempt	days / 90	For the highest-priority open gap: days since last outreach targeting this measure.	Outreach log: DATEDIFF(today, MAX(send_date WHERE measure=X))
+143	Action	Gap-Specific	gap_0_attempt_count	Top gap: total attempts	count / 10	Total outreach attempts for this measure for this patient this year.	Outreach log: COUNT(WHERE measure=X AND patient_id=Y)
+144	Action	Gap-Specific	gap_1_days_since_attempt	2nd gap: days since attempt	days / 90	Same for 2nd priority gap.	Outreach log
+145	Action	Gap-Specific	gap_1_attempt_count	2nd gap: total attempts	count / 10	Same for 2nd priority gap.	Outreach log
+146	Action	Gap-Specific	gap_2_days_since_attempt	3rd gap: days since attempt	days / 90	Same for 3rd priority gap.	Outreach log
+147	Action	Gap-Specific	gap_2_attempt_count	3rd gap: total attempts	count / 10	Same for 3rd priority gap.	Outreach log
+148	Action	Gap-Specific	gap_3_days_since_attempt	4th gap: days since attempt	days / 90	Same for 4th priority gap.	Outreach log
+149	Action	Gap-Specific	gap_3_attempt_count	4th gap: total attempts	count / 10	Same for 4th priority gap.	Outreach log
+150	Action	Gap-Specific	gap_4_days_since_attempt	5th gap: days since attempt	days / 90	Same for 5th priority gap.	Outreach log
+151	Action	Gap-Specific	gap_4_attempt_count	5th gap: total attempts	count / 10	Same for 5th priority gap.	Outreach log
+152	Action	Measure Attempts	priority_gap_0_measure_idx	#1 priority gap: measure index	idx / 18	Measure index of highest-priority open gap (ranked by CMS weight then gap age).	Derived: sort open_gaps by weight DESC, age DESC
+153	Action	Measure Attempts	priority_gap_0_attempt_count	#1 priority gap: attempts	count / 10	Total outreach attempts for this top priority measure.	Outreach log
+154	Action	Measure Attempts	priority_gap_0_best_channel	#1 priority gap: best channel	idx / 5	Channel with highest success rate for this measure for this patient.	State machine: argmax(success_rate by channel for this measure)
+155	Action	Measure Attempts	priority_gap_0_days_since	#1 priority gap: days since	days / 90	Days since last attempt at this priority gap.	Outreach log
+156	Action	Measure Attempts	priority_gap_1_measure_idx	#2 priority gap: measure index	idx / 18	Same for 2nd priority gap.	Derived
+157	Action	Measure Attempts	priority_gap_1_attempt_count	#2 priority gap: attempts	count / 10	Same for 2nd priority.	Outreach log
+158	Action	Measure Attempts	priority_gap_1_best_channel	#2 priority gap: best channel	idx / 5	Same for 2nd priority.	State machine
+159	Action	Measure Attempts	priority_gap_1_days_since	#2 priority gap: days since	days / 90	Same for 2nd priority.	Outreach log
+160	Action	Measure Attempts	priority_gap_2_measure_idx	#3 priority gap: measure index	idx / 18	Same for 3rd priority gap.	Derived
+161	Action	Measure Attempts	priority_gap_2_attempt_count	#3 priority gap: attempts	count / 10	Same for 3rd priority.	Outreach log
+162	Action	Measure Attempts	priority_gap_2_best_channel	#3 priority gap: best channel	idx / 5	Same for 3rd priority.	State machine
+163	Action	Measure Attempts	priority_gap_2_days_since	#3 priority gap: days since	days / 90	Same for 3rd priority.	Outreach log

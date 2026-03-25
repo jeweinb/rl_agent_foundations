@@ -1,0 +1,126 @@
+Action ID	Measure	Measure Description	CMS Weight	Category	Channel	Variant	Variant Description	Hypothesis: Why This Closes the Gap
+0	NO_ACTION	No Action	0	-	none	none	Take no action	Patient may need rest from outreach; contact fatigue reduces future engagement. Strategic silence preserves budget and avoids opt-outs.
+1	COL	Colorectal Cancer Screening	1	Screenings	sms	scheduling_link	SMS with scheduling link for colonoscopy	Direct scheduling removes friction — patient can book immediately from phone. SMS has highest open rate for appointment actions.
+2	COL	Colorectal Cancer Screening	1	Screenings	sms	incentive_offer	SMS with $50 incentive offer for colonoscopy	Financial incentive overcomes cost/inconvenience barrier. Colonoscopy prep is burdensome; reward offsets effort.
+3	COL	Colorectal Cancer Screening	1	Screenings	email	educational	Email with educational content about colorectal screening	Education addresses fear/ignorance barriers. Patients unaware of FIT/Cologuard alternatives may avoid colonoscopy.
+4	COL	Colorectal Cancer Screening	1	Screenings	email	scheduling_link	Email with embedded scheduler for colonoscopy	Rich HTML email allows map of nearby facilities + calendar picker. Better for patients who research before acting.
+5	COL	Colorectal Cancer Screening	1	Screenings	portal	scheduling_link	Portal in-app scheduler for colonoscopy	Portal users are digitally engaged; in-app scheduling captures them in a healthcare context.
+6	COL	Colorectal Cancer Screening	1	Screenings	app	push_reminder	App push reminder for colonoscopy	Push notification catches patient at high-attention moment. Short, actionable. Best for app-engaged patients.
+7	COL	Colorectal Cancer Screening	1	Screenings	ivr	appointment_reminder	IVR automated call for colonoscopy	Reaches patients without smartphones or who prefer phone. Automated call with press-1-to-schedule.
+8	BCS	Breast Cancer Screening	3	Screenings	sms	scheduling_link	SMS with scheduling link for mammogram	Direct scheduling link removes friction. Mammogram is quick; main barrier is scheduling.
+9	BCS	Breast Cancer Screening	3	Screenings	sms	incentive_offer	SMS with $50 incentive offer for mammogram	Incentive for triple-weighted measure. High ROI: $50 cost vs STARS impact of 3x weight.
+10	BCS	Breast Cancer Screening	3	Screenings	email	educational	Email with educational content about breast cancer screening	Addresses anxiety about mammogram pain/results. Educational framing reduces avoidance.
+11	BCS	Breast Cancer Screening	3	Screenings	email	scheduling_link	Email with embedded scheduler for mammogram	Rich email with facility finder + mobile mammogram van schedule if available.
+12	BCS	Breast Cancer Screening	3	Screenings	portal	scheduling_link	Portal scheduler for mammogram	In-portal scheduling integrated with plan network facilities.
+13	BCS	Breast Cancer Screening	3	Screenings	app	push_reminder	App push for mammogram	Quick actionable reminder for digitally engaged members.
+14	BCS	Breast Cancer Screening	3	Screenings	ivr	appointment_reminder	IVR call for mammogram	Reaches less digitally engaged females. Phone scheduling assistance.
+15	EED	Eye Exam for Diabetes	3	Screenings	sms	scheduling_link	SMS with eye exam scheduling link	Quick scheduling for retinal exam. Many diabetics don't know they need annual eye exams.
+16	EED	Eye Exam for Diabetes	3	Screenings	sms	incentive_offer	SMS with incentive for eye exam	Financial incentive for triple-weighted measure. Diabetic retinopathy prevention is critical.
+17	EED	Eye Exam for Diabetes	3	Screenings	email	educational	Email about diabetic eye care	Educates on retinopathy risk. "You have diabetes — here's why annual eye exams matter."
+18	EED	Eye Exam for Diabetes	3	Screenings	email	scheduling_link	Email with eye exam scheduler	Rich email with ophthalmologist/optometrist finder near patient zip code.
+19	EED	Eye Exam for Diabetes	3	Screenings	portal	scheduling_link	Portal eye exam scheduler	Integrated scheduling for established portal users.
+20	EED	Eye Exam for Diabetes	3	Screenings	app	push_reminder	App push for eye exam	Push notification timed to patient's typical app usage window.
+21	EED	Eye Exam for Diabetes	3	Screenings	ivr	appointment_reminder	IVR call for eye exam	Phone-based scheduling for patients who need help navigating eye care system.
+22	FVA	Adult Immunization Tdap	1	Vaccines	sms	pharmacy_locator	SMS with pharmacy locator for Tdap	Pharmacy locator removes "where do I go?" barrier. Walk-in pharmacies make vaccines frictionless.
+23	FVA	Adult Immunization Tdap	1	Vaccines	sms	zero_cost_reminder	SMS zero-cost reminder for Tdap	Cost perception is a barrier even when free. Explicit "no cost to you" messaging drives action.
+24	FVA	Adult Immunization Tdap	1	Vaccines	email	educational	Email about Tdap vaccination	Education on tetanus/pertussis risk. Many adults don't know they need Tdap booster every 10 years.
+25	FVA	Adult Immunization Tdap	1	Vaccines	email	pharmacy_locator	Email with pharmacy map for Tdap	Rich email with interactive pharmacy finder + walk-in hours.
+26	FVA	Adult Immunization Tdap	1	Vaccines	app	push_reminder	App push for Tdap	Quick reminder for app-engaged members near a pharmacy visit.
+27	FVA	Adult Immunization Tdap	1	Vaccines	ivr	appointment_reminder	IVR call for Tdap	Phone-based reminder with option to transfer to pharmacy.
+28	FVO	Pneumococcal Vaccination	1	Vaccines	sms	pharmacy_locator	SMS pharmacy locator for pneumococcal vaccine	Same pharmacy convenience strategy. PCV20 is one-dose — very low barrier.
+29	FVO	Pneumococcal Vaccination	1	Vaccines	sms	zero_cost_reminder	SMS zero-cost for pneumococcal vaccine	Emphasize covered benefit. Many seniors assume vaccines cost money.
+30	FVO	Pneumococcal Vaccination	1	Vaccines	email	educational	Email about pneumococcal vaccination	Education on pneumonia risk for 65+. "1 in 3 adults over 65 who get pneumococcal pneumonia die."
+31	FVO	Pneumococcal Vaccination	1	Vaccines	email	pharmacy_locator	Email pharmacy map for pneumococcal	Facility finder with vaccine availability status.
+32	FVO	Pneumococcal Vaccination	1	Vaccines	app	push_reminder	App push for pneumococcal vaccine	Push timed to pharmacy proximity (geofencing if available).
+33	FVO	Pneumococcal Vaccination	1	Vaccines	ivr	appointment_reminder	IVR call for pneumococcal vaccine	Phone scheduling for seniors who prefer voice interaction.
+34	AIS	Adult Immunization Zoster	1	Vaccines	sms	pharmacy_locator	SMS pharmacy locator for Shingrix	Shingrix requires 2 doses; pharmacy locator + reminder for dose 2 scheduling.
+35	AIS	Adult Immunization Zoster	1	Vaccines	sms	zero_cost_reminder	SMS zero-cost for Shingrix	Shingrix retail price is ~$200/dose; emphasizing $0 copay drives uptake.
+36	AIS	Adult Immunization Zoster	1	Vaccines	email	educational	Email about shingles vaccination	1 in 3 adults will get shingles. Educational messaging on pain/complications.
+37	AIS	Adult Immunization Zoster	1	Vaccines	email	pharmacy_locator	Email pharmacy map for Shingrix	Rich email with Shingrix-stocking pharmacy finder.
+38	AIS	Adult Immunization Zoster	1	Vaccines	app	push_reminder	App push for Shingrix	Quick reminder with link to nearest pharmacy.
+39	AIS	Adult Immunization Zoster	1	Vaccines	ivr	appointment_reminder	IVR call for Shingrix	Phone-based scheduling, especially for dose 2 follow-up.
+40	FLU	Influenza Vaccination	1	Vaccines	sms	pharmacy_locator	SMS pharmacy locator for flu shot	Walk-in flu shots at any pharmacy. Lowest friction vaccine action.
+41	FLU	Influenza Vaccination	1	Vaccines	sms	zero_cost_reminder	SMS zero-cost flu shot reminder	Annual measure; consistent messaging each fall season drives habit formation.
+42	FLU	Influenza Vaccination	1	Vaccines	email	educational	Email about flu vaccination	Education on flu severity for seniors + immunocompromised. "Flu kills 36K Americans/year."
+43	FLU	Influenza Vaccination	1	Vaccines	email	pharmacy_locator	Email pharmacy map for flu shot	Interactive pharmacy finder with current wait times if available.
+44	FLU	Influenza Vaccination	1	Vaccines	app	push_reminder	App push for flu shot	Timely push during Oct-Nov peak vaccination window.
+45	FLU	Influenza Vaccination	1	Vaccines	ivr	appointment_reminder	IVR call for flu shot	Phone reminder for members who respond to voice outreach.
+46	CBP	Controlling Blood Pressure	3	Chronic	sms	appointment_reminder	SMS appointment reminder for BP check	Reminds patient to schedule/attend BP monitoring visit. Regular monitoring = gap closure.
+47	CBP	Controlling Blood Pressure	3	Chronic	sms	home_device_offer	SMS free home BP monitor offer	Home monitoring removes clinic visit barrier. Patient can self-report controlled BP.
+48	CBP	Controlling Blood Pressure	3	Chronic	email	educational	Email about blood pressure management	Education on lifestyle modifications (diet, exercise, sodium). Empowers self-management.
+49	CBP	Controlling Blood Pressure	3	Chronic	email	care_mgmt_enrollment	Email care management enrollment for BP	Care management provides nurse coaching + medication titration support. High-touch for uncontrolled.
+50	CBP	Controlling Blood Pressure	3	Chronic	portal	lab_scheduling	Portal lab/visit scheduling for BP	Self-scheduling within portal for BP check appointment.
+51	CBP	Controlling Blood Pressure	3	Chronic	app	home_monitoring	App home BP monitoring integration	Connected BP cuff syncs readings to app. Clinician can adjust meds remotely.
+52	CBP	Controlling Blood Pressure	3	Chronic	ivr	appointment_reminder	IVR call for BP appointment	Automated call with press-1 to schedule BP monitoring visit.
+53	BPD	BP Control for Diabetes	3	Chronic	sms	appointment_reminder	SMS for diabetic BP check	Dual-condition patients need integrated care. BP visit can address both DM + HTN.
+54	BPD	BP Control for Diabetes	3	Chronic	sms	home_device_offer	SMS free BP monitor for diabetic patient	Home monitoring particularly valuable for diabetes patients who need frequent monitoring.
+55	BPD	BP Control for Diabetes	3	Chronic	email	educational	Email about BP + diabetes connection	Educates on micro/macrovascular complications when both conditions present.
+56	BPD	BP Control for Diabetes	3	Chronic	email	care_mgmt_enrollment	Email care mgmt for diabetic BP	Enrolls in disease management program addressing both conditions simultaneously.
+57	BPD	BP Control for Diabetes	3	Chronic	portal	lab_scheduling	Portal scheduling for diabetic BP check	Combined A1C + BP visit scheduling.
+58	BPD	BP Control for Diabetes	3	Chronic	app	home_monitoring	App BP monitoring for diabetic	Connected monitoring for high-risk dual-diagnosis patients.
+59	BPD	BP Control for Diabetes	3	Chronic	ivr	appointment_reminder	IVR for diabetic BP appointment	Phone scheduling for dual-diagnosis patients.
+60	HBD	Hemoglobin A1C Control	3	Chronic	sms	appointment_reminder	SMS for A1C lab appointment	Reminds patient to get quarterly A1C lab draw. Consistent monitoring drives control.
+61	HBD	Hemoglobin A1C Control	3	Chronic	sms	home_device_offer	SMS free CGM/glucometer offer	Continuous glucose monitoring helps patients see impact of diet/meds in real time.
+62	HBD	Hemoglobin A1C Control	3	Chronic	email	educational	Email about diabetes A1C management	Education on A1C targets, diet, exercise, medication importance.
+63	HBD	Hemoglobin A1C Control	3	Chronic	email	care_mgmt_enrollment	Email diabetes care management	Nurse-led diabetes management program with medication titration support.
+64	HBD	Hemoglobin A1C Control	3	Chronic	portal	lab_scheduling	Portal A1C lab scheduling	Self-schedule lab draw at convenient location/time.
+65	HBD	Hemoglobin A1C Control	3	Chronic	app	home_monitoring	App glucose monitoring integration	CGM/glucometer integration with medication reminders and trend visualization.
+66	HBD	Hemoglobin A1C Control	3	Chronic	ivr	appointment_reminder	IVR for A1C lab appointment	Phone reminder for lab draw scheduling.
+67	KED	Kidney Disease Evaluation	1	Chronic	sms	appointment_reminder	SMS for kidney evaluation labs	Reminds patient to get annual eGFR + uACR labs. Many diabetics unaware of kidney risk.
+68	KED	Kidney Disease Evaluation	1	Chronic	sms	home_device_offer	SMS home urine test kit offer	At-home uACR test kit removes clinic visit barrier. Mail-in lab.
+69	KED	Kidney Disease Evaluation	1	Chronic	email	educational	Email about diabetic kidney disease	Education on CKD progression in diabetes. Early detection slows progression.
+70	KED	Kidney Disease Evaluation	1	Chronic	email	care_mgmt_enrollment	Email nephrology referral	For patients with existing CKD: nephrology referral + care coordination.
+71	KED	Kidney Disease Evaluation	1	Chronic	portal	lab_scheduling	Portal kidney lab scheduling	Self-schedule eGFR + uACR together.
+72	KED	Kidney Disease Evaluation	1	Chronic	app	home_monitoring	App kidney health tracking	Track eGFR trend over time in app. Motivates continued monitoring.
+73	KED	Kidney Disease Evaluation	1	Chronic	ivr	appointment_reminder	IVR for kidney labs	Phone reminder for annual kidney evaluation labs.
+74	MAC	Statin Adherence (Cholesterol)	3	Med Adherence	sms	refill_reminder	SMS statin refill reminder	Timely refill reminder 3-5 days before expected run-out. Prevents gaps in coverage.
+75	MAC	Statin Adherence (Cholesterol)	3	Med Adherence	sms	mail_order_offer	SMS 90-day mail order statin offer	90-day supply via mail order reduces refill frequency by 3x. Convenience drives adherence.
+76	MAC	Statin Adherence (Cholesterol)	3	Med Adherence	email	refill_reminder	Email statin refill reminder	Detailed email with pharmacy hours, refill number, and auto-refill enrollment link.
+77	MAC	Statin Adherence (Cholesterol)	3	Med Adherence	email	side_effect_support	Email statin side effect support	Addresses muscle pain concerns (most common reason for statin discontinuation).
+78	MAC	Statin Adherence (Cholesterol)	3	Med Adherence	portal	adherence_dashboard	Portal statin adherence dashboard	Visual PDC tracker showing gap days. Gamifies adherence with streaks.
+79	MAC	Statin Adherence (Cholesterol)	3	Med Adherence	app	refill_reminder	App statin refill push	Push notification timed to expected run-out date.
+80	MAC	Statin Adherence (Cholesterol)	3	Med Adherence	app	adherence_gamification	App gamified statin adherence	Daily check-in + streak counter + rewards for 80%+ PDC achievement.
+81	MAC	Statin Adherence (Cholesterol)	3	Med Adherence	ivr	refill_reminder	IVR statin refill call	Automated call with press-1 to transfer to pharmacy for refill.
+82	MRA	RAS Antagonist Adherence	3	Med Adherence	sms	refill_reminder	SMS ACE/ARB refill reminder	Timely refill reminder for blood pressure medication. Critical for dual DM+HTN patients.
+83	MRA	RAS Antagonist Adherence	3	Med Adherence	sms	mail_order_offer	SMS 90-day mail order ACE/ARB	Mail order convenience for chronic medication.
+84	MRA	RAS Antagonist Adherence	3	Med Adherence	email	refill_reminder	Email ACE/ARB refill reminder	Detailed refill instructions with pharmacy info.
+85	MRA	RAS Antagonist Adherence	3	Med Adherence	email	side_effect_support	Email ACE/ARB side effect support	Addresses cough (ACE inhibitor) or dizziness (ARB) concerns. Offers alternative med discussion.
+86	MRA	RAS Antagonist Adherence	3	Med Adherence	portal	adherence_dashboard	Portal ACE/ARB adherence dashboard	PDC tracker with BP correlation visualization (shows impact of adherence on BP).
+87	MRA	RAS Antagonist Adherence	3	Med Adherence	app	refill_reminder	App ACE/ARB refill push	Push notification for refill timing.
+88	MRA	RAS Antagonist Adherence	3	Med Adherence	app	adherence_gamification	App gamified ACE/ARB adherence	Gamification with BP trend integration.
+89	MRA	RAS Antagonist Adherence	3	Med Adherence	ivr	refill_reminder	IVR ACE/ARB refill call	Phone-based refill for less digitally engaged patients.
+90	MDS	Diabetes Statin Adherence	3	Med Adherence	sms	refill_reminder	SMS diabetes statin refill reminder	Statin for diabetes patients (cardiovascular risk reduction). Refill timing reminder.
+91	MDS	Diabetes Statin Adherence	3	Med Adherence	sms	mail_order_offer	SMS 90-day mail order diabetes statin	Convenience of 90-day supply for chronic statin use.
+92	MDS	Diabetes Statin Adherence	3	Med Adherence	email	refill_reminder	Email diabetes statin refill	Refill reminder with diabetes-specific cardiovascular risk messaging.
+93	MDS	Diabetes Statin Adherence	3	Med Adherence	email	side_effect_support	Email diabetes statin side effect info	Addresses interaction concerns with diabetes medications + statin side effects.
+94	MDS	Diabetes Statin Adherence	3	Med Adherence	portal	adherence_dashboard	Portal diabetes statin dashboard	Combined diabetes + statin adherence view with A1C + cholesterol trends.
+95	MDS	Diabetes Statin Adherence	3	Med Adherence	app	refill_reminder	App diabetes statin push	Push notification for statin refill.
+96	MDS	Diabetes Statin Adherence	3	Med Adherence	app	adherence_gamification	App gamified diabetes statin	Gamification combining diabetes + statin adherence goals.
+97	MDS	Diabetes Statin Adherence	3	Med Adherence	ivr	refill_reminder	IVR diabetes statin refill	Phone refill for patients managing multiple medications.
+98	DSF	Depression Screening Follow-Up	3	Mental Health	sms	screening_reminder	SMS depression screening reminder	Reminds patient about follow-up after positive screen. 30-day window is tight.
+99	DSF	Depression Screening Follow-Up	3	Mental Health	sms	telehealth_link	SMS telehealth link for depression	Telehealth removes transportation/stigma barriers. Patient can access from home.
+100	DSF	Depression Screening Follow-Up	3	Mental Health	email	resource_guide	Email behavioral health resource guide	Comprehensive guide to local BH resources, hotlines, support groups.
+101	DSF	Depression Screening Follow-Up	3	Mental Health	email	medication_support	Email depression medication info	Information about treatment options, what to expect, side effect management.
+102	DSF	Depression Screening Follow-Up	3	Mental Health	portal	screening_tool	Portal depression screening tool	In-portal PHQ-9 retake + automated clinician notification if elevated.
+103	DSF	Depression Screening Follow-Up	3	Mental Health	app	telehealth_link	App telehealth for depression	One-tap telehealth BH appointment from app.
+104	DSF	Depression Screening Follow-Up	3	Mental Health	ivr	care_navigator	IVR care navigator for depression	Live transfer to BH care navigator who schedules follow-up appointment.
+105	DRR	Depression Remission	3	Mental Health	sms	screening_reminder	SMS PHQ-9 rescreen reminder	Reminds patient to retake PHQ-9. Score < 5 = remission = gap closure.
+106	DRR	Depression Remission	3	Mental Health	sms	telehealth_link	SMS telehealth for depression follow-up	Telehealth for medication management + therapy check-in.
+107	DRR	Depression Remission	3	Mental Health	email	resource_guide	Email depression recovery resources	Ongoing support resources: therapy apps, peer support, crisis lines.
+108	DRR	Depression Remission	3	Mental Health	email	medication_support	Email antidepressant medication support	Encourages antidepressant adherence (takes 4-6 weeks for full effect). Reduces premature discontinuation.
+109	DRR	Depression Remission	3	Mental Health	portal	screening_tool	Portal PHQ-9 retake tool	Easy PHQ-9 retake in portal with automatic result submission to PCP.
+110	DRR	Depression Remission	3	Mental Health	app	telehealth_link	App telehealth for depression	Quick telehealth booking from app for med check or therapy session.
+111	DRR	Depression Remission	3	Mental Health	ivr	care_navigator	IVR BH care navigator	Live transfer to BH navigator for therapy/medication coordination.
+112	DMC02	Antidepressant Med Management	3	Mental Health	sms	screening_reminder	SMS antidepressant adherence check	"Still taking your medication?" check-in during acute phase (first 84 days).
+113	DMC02	Antidepressant Med Management	3	Mental Health	sms	telehealth_link	SMS telehealth for med management	Quick prescriber check-in for dose adjustment or side effect discussion.
+114	DMC02	Antidepressant Med Management	3	Mental Health	email	resource_guide	Email antidepressant resource guide	Guide on why continued medication matters. Addresses "I feel better, can I stop?" question.
+115	DMC02	Antidepressant Med Management	3	Mental Health	email	medication_support	Email antidepressant side effect support	Detailed side effect management + when to contact prescriber vs normal adjustment period.
+116	DMC02	Antidepressant Med Management	3	Mental Health	portal	screening_tool	Portal medication tracking tool	In-portal medication diary + side effect logger with prescriber sharing.
+117	DMC02	Antidepressant Med Management	3	Mental Health	app	telehealth_link	App telehealth for antidepressant mgmt	Quick prescriber access for dose concerns.
+118	DMC02	Antidepressant Med Management	3	Mental Health	ivr	care_navigator	IVR care navigator for antidepressant	Live transfer to care coordinator who bridges prescriber + pharmacy.
+119	TRC_M	Transitions of Care	1	Care Coord	sms	followup_reminder	SMS post-discharge follow-up reminder	Within 30 days of discharge: reminds patient to schedule follow-up. Prevents readmission.
+120	TRC_M	Transitions of Care	1	Care Coord	sms	med_reconciliation	SMS medication reconciliation prompt	Prompts patient to bring all medications to follow-up visit for reconciliation.
+121	TRC_M	Transitions of Care	1	Care Coord	email	discharge_checklist	Email discharge checklist	Comprehensive post-discharge checklist: follow-up appt, med list, warning signs, who to call.
+122	TRC_M	Transitions of Care	1	Care Coord	portal	med_review_scheduler	Portal med review scheduler	Self-schedule medication reconciliation visit with PCP or pharmacist.
+123	TRC_M	Transitions of Care	1	Care Coord	app	followup_reminder	App post-discharge reminder	Push notification with discharge instructions + follow-up countdown timer.
+124	TRC_M	Transitions of Care	1	Care Coord	ivr	care_navigator	IVR transition nurse transfer	Live transfer to transition-of-care nurse for discharge planning + scheduling.
