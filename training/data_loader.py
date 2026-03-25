@@ -73,8 +73,8 @@ def build_offline_episodes(
         reward_list = []
         mask_list = []
 
-        state_vec = base_vec.copy()
         open_gaps = set(snap.get("open_gaps", []))
+        closed_gaps = set(snap.get("closed_gaps", []))
         engagement = snap.get("engagement", {})
 
         channel_avail = {
@@ -85,16 +85,53 @@ def build_offline_episodes(
             "ivr": True,
         }
 
+        # Track Tier 3 action context as we process historical records
+        from config import ACTION_BY_ID
+        messages_sent = 0
+        responses = 0
+        channels_used = set()
+        channel_counts = {"sms": 0, "email": 0, "portal": 0, "app": 0, "ivr": 0}
+        channel_last_step = {"sms": -999, "email": -999, "portal": -999, "app": -999, "ivr": -999}
+        channel_success = {"sms": [0, 0], "email": [0, 0], "portal": [0, 0], "app": [0, 0], "ivr": [0, 0]}  # [successes, attempts]
+
         for i, record in enumerate(records):
+            # Build state vector with accumulated action context
+            action_info = ACTION_BY_ID.get(record["action_id"])
+            response_rate = responses / max(messages_sent, 1)
+            ch_success_rates = {
+                ch: (s[0] / max(s[1], 1)) for ch, s in channel_success.items()
+            }
+            ch_recency = {
+                ch: (i - d if d >= 0 else 90) for ch, d in channel_last_step.items()
+            }
+
+            state_vec = snapshot_to_vector(
+                snap,
+                # Tier 3: accumulated action context
+                patient_messages_received=messages_sent,
+                patient_response_rate=response_rate,
+                patient_contacts_7d=min(messages_sent, 3),  # Approximate from history
+                patient_days_since_contact=max(0, i - messages_sent) if messages_sent > 0 else 90,
+                patient_channels_used=len(channels_used),
+                patient_channel_success=ch_success_rates,
+                patient_days_since_closure=90.0,
+                patient_avg_gap_age=float(i * 7),  # Approximate: ~1 record per week
+                channel_affinity_counts=channel_counts,
+                channel_affinity_recency=ch_recency,
+            )
+
+            # Update gap flags in the vector to reflect closures so far
+            from config import FEAT_IDX_GAP_FLAGS_START
+            for m in HEDIS_MEASURES:
+                gap_idx = FEAT_IDX_GAP_FLAGS_START + HEDIS_MEASURES.index(m)
+                state_vec[gap_idx] = 1.0 if m in open_gaps else 0.0
+
             # Compute mask for current state
             mask = compute_action_mask(
                 open_gaps=open_gaps,
                 channel_availability=channel_avail,
             )
 
-            # Insert no-action steps between real actions to teach the model
-            # that waiting/silence is a valid strategy. Uses the days_since_last_contact
-            # to determine how many idle days happened between actions.
             action_id = record["action_id"]
             outcome = record["outcome"]
             measure = record["measure"]
@@ -112,16 +149,22 @@ def build_offline_episodes(
             reward_list.append(reward)
             mask_list.append(mask.copy())
 
-            # Update state for next step
+            # Update accumulated action context for next step
+            if action_info and action_info.measure != "NO_ACTION":
+                messages_sent += 1
+                ch = action_info.channel
+                channels_used.add(ch)
+                channel_counts[ch] = channel_counts.get(ch, 0) + 1
+                channel_last_step[ch] = i
+                channel_success[ch][1] += 1  # attempt
+                if outcome.get("clicked") or outcome.get("gap_closed_within_30d"):
+                    responses += 1
+                    channel_success[ch][0] += 1  # success
+
+            # Update gap state
             if outcome.get("gap_closed_within_30d") and measure in HEDIS_MEASURES:
                 open_gaps.discard(measure)
-                from config import FEAT_IDX_GAP_FLAGS_START
-                gap_idx = FEAT_IDX_GAP_FLAGS_START + HEDIS_MEASURES.index(measure)
-                state_vec[gap_idx] = 0.0
-
-            # Small state perturbation
-            state_vec += np.random.normal(0, 0.005, STATE_DIM).astype(np.float32)
-            state_vec = np.clip(state_vec, -5.0, 5.0)
+                closed_gaps.add(measure)
 
         if len(obs_list) < 2:
             continue

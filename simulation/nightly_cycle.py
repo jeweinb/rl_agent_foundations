@@ -196,13 +196,20 @@ def run_nightly_cycle(
                 states = torch.FloatTensor(ep["obs"])
                 actions = torch.LongTensor(ep["actions"])
                 rewards = torch.FloatTensor(ep["rewards"])
-                # Normalized continuous labels preserving measure weight signal
-                labels = (rewards / 3.05).clamp(0, 1)
+                # Binary labels matching initial training distribution (0 = no closure, 1 = closure)
+                # Use sample weights to preserve measure importance signal
+                labels = (rewards > 0.1).float()
+                # Weight high-reward closures more: weight-3 measures get 3x gradient
+                sample_weights = torch.where(rewards > 0.5, rewards / rewards.max().clamp(min=1.0), torch.ones_like(rewards))
                 # Use actual simulation day for time-aware reward prediction
                 sim_day = ep.get("sim_day", 30)
                 days = torch.full((len(states),), float(sim_day))
                 opt_r.zero_grad()
-                loss = reward_model.compute_loss(states, actions, days, labels)
+                # Apply sample weights: high-weight measure closures get stronger gradient
+                pred = reward_model.forward(states, actions, days)
+                target = labels.unsqueeze(-1) if labels.ndim == 1 else labels
+                per_sample_loss = torch.nn.functional.binary_cross_entropy(pred, target, reduction='none')
+                loss = (per_sample_loss.squeeze() * sample_weights).mean()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(reward_model.parameters(), 1.0)
                 opt_r.step()

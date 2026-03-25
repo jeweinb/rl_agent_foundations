@@ -300,7 +300,7 @@ if reward_model and total_transitions > 10:
         states = torch.FloatTensor(ep["obs"])
         actions = torch.LongTensor(ep["actions"])
         rewards = torch.FloatTensor(ep["rewards"])
-        labels = (rewards / 3.05).clamp(0, 1)  # Preserve measure weight signal
+        labels = (rewards > 0.1).float()  # Binary labels matching initial training
         days = torch.full((len(states),), 7.0)  # Use actual sim day when available
         opt_r.zero_grad()
         loss = reward_model.compute_loss(states, actions, days, labels)

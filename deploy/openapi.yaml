@@ -327,6 +327,31 @@ components:
               type: integer
               description: "Distinct measures with pending actions"
               example: 1
+            channel_affinity_counts:
+              type: object
+              description: |
+                Lifetime action count per channel for this patient.
+                Captures channel usage volume (how much each channel has been used).
+                Combined with channel_success_rates (effectiveness) and
+                channel_affinity_recency (freshness), gives the model a complete
+                per-channel affinity profile.
+              properties:
+                sms: { type: integer, example: 5, description: "Total SMS messages sent lifetime" }
+                email: { type: integer, example: 3, description: "Total emails sent lifetime" }
+                portal: { type: integer, example: 0, description: "Total portal messages sent lifetime" }
+                app: { type: integer, example: 1, description: "Total app pushes sent lifetime" }
+                ivr: { type: integer, example: 2, description: "Total IVR calls made lifetime" }
+            channel_affinity_recency:
+              type: object
+              description: |
+                Days since last use of each channel for this patient.
+                90 = never used or very long ago.
+              properties:
+                sms: { type: integer, example: 3, description: "Days since last SMS" }
+                email: { type: integer, example: 45, description: "Days since last email" }
+                portal: { type: integer, example: 90, description: "Days since last portal (never)" }
+                app: { type: integer, example: 20, description: "Days since last app push" }
+                ivr: { type: integer, example: 60, description: "Days since last IVR call" }
 
     PredictionResponse:
       type: object
