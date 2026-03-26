@@ -99,6 +99,14 @@ def run_daily_cycle(
                 valid = np.where(mask)[0]
                 action_id = int(rng.choice(valid)) if len(valid) > 0 else 0
 
+            # 2b. Q-value: agent's predicted long-run value for this (state, action) pair
+            q_value = None
+            if hasattr(agent, "get_q_value"):
+                try:
+                    q_value = agent.get_q_value(state_vec, action_id)
+                except Exception:
+                    pass
+
             # 3. Execute action in the world (handles all business rules)
             outcome = world.execute_action(pid, action_id)
 
@@ -106,6 +114,7 @@ def run_daily_cycle(
             daily_actions.append({
                 "patient_id": pid,
                 "day": day,
+                "q_value": q_value,
                 **outcome,
             })
         except Exception as e:
@@ -124,6 +133,7 @@ def run_daily_cycle(
             "obs": state_vec.tolist(),
             "action": action_id,
             "reward": outcome["reward"],
+            "q_value": q_value,
             "mask": mask.tolist(),
             "patient_id": pid,
             "sim_day": day,

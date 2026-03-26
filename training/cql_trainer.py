@@ -284,6 +284,14 @@ class ActorCriticCQL:
     def get_action_greedy(self, obs, mask=None):
         return self.actor.get_action_greedy(obs, mask)
 
+    def get_q_value(self, obs: np.ndarray, action_id: int) -> float:
+        """Return the pessimistic Q-value (min of twin critics) for a given (state, action) pair."""
+        self.critic.eval()
+        with torch.no_grad():
+            obs_t = torch.FloatTensor(obs).unsqueeze(0)
+            q_min = self.critic.q_min(obs_t)   # (1, num_actions)
+            return float(q_min[0, action_id].item())
+
     def state_dict(self):
         return {
             "actor": self.actor.state_dict(),
