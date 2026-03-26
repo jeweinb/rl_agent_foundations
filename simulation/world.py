@@ -127,6 +127,15 @@ class WorldSimulator:
         # Cache state vectors per patient (updated by dynamics model when available)
         self._state_vectors: Dict[str, np.ndarray] = {}
 
+        # Baseline HEDIS compliance: patients NOT in initial open_gaps already meet the measure.
+        # Used to convert gap-closure counts to full HEDIS compliance rates (for STARS scoring).
+        n_total = len(self.patients)
+        self._n_initially_meeting: Dict[str, int] = {}
+        for m in HEDIS_MEASURES:
+            n_open = sum(1 for ps in self.patients.values() if m in ps.snapshot.get("open_gaps", []))
+            self._n_initially_meeting[m] = n_total - n_open
+        self._n_total_patients: int = n_total
+
     @property
     def cohort_avg_messages(self) -> float:
         if not self.patients:
@@ -403,6 +412,8 @@ class WorldSimulator:
             "closure_reward": closure_reward,
             "reward_updates": reward_updates,
             "total_patients": total_patients,
+            "n_initially_meeting": self._n_initially_meeting,
+            "n_total_patients": self._n_total_patients,
             "budget_remaining": self.budget_remaining,
             "budget_max": self.budget_total,
             "budget_used_today": self.daily_actions_taken,
@@ -499,13 +510,14 @@ class WorldSimulator:
         """Update cached system-level metrics used by Tier 2 features."""
         from environment.reward import compute_stars_score, measure_rate_to_stars
 
-        # Compute closure rates
+        # Compute HEDIS compliance rates (not gap-closure fractions).
+        # hedis_rate[m] = (patients already meeting + patients who closed gap) / all patients
         closure_rates = {}
         for m in HEDIS_MEASURES:
-            total = total_patients.get(m, 0)
-            closed = sum(1 for ps in self.patients.values()
-                        if m in getattr(ps, 'closed_measures', set()))
-            closure_rates[m] = closed / max(total, 1)
+            n_already = self._n_initially_meeting.get(m, 0)
+            n_closed = sum(1 for ps in self.patients.values()
+                          if m in getattr(ps, 'closed_measures', set()))
+            closure_rates[m] = (n_already + n_closed) / max(self._n_total_patients, 1)
 
         self._current_stars = compute_stars_score(closure_rates)
 

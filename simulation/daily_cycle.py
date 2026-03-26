@@ -81,7 +81,6 @@ def run_daily_cycle(
     daily_rewards = []
     daily_experiences = []
     action_counts: Dict[str, int] = {}
-
     log = get_logger()
 
     for pid in world.patients:

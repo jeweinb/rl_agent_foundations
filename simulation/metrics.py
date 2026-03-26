@@ -17,7 +17,9 @@ class MetricsTracker:
         self.cumulative_reward = 0.0
         self.cumulative_actions = 0
         self.gap_closures_by_measure: Dict[str, int] = {m: 0 for m in HEDIS_MEASURES}
-        self.total_patients_by_measure: Dict[str, int] = {m: 0 for m in HEDIS_MEASURES}
+        # HEDIS baseline: patients already meeting each measure at Day 0 (set on first record_day call)
+        self._n_initially_meeting: Dict[str, int] = {}
+        self._n_total_patients: int = 0
         self.model_versions: List[Dict] = []
 
     def record_day(
@@ -27,6 +29,8 @@ class MetricsTracker:
         daily_actions: int,
         daily_gap_closures: Dict[str, int],
         daily_total_patients: Dict[str, int],
+        n_initially_meeting: Dict[str, int] = None,
+        n_total_patients: int = 0,
         champion_score: float = None,
         challenger_score: float = None,
         model_promoted: bool = False,
@@ -42,17 +46,19 @@ class MetricsTracker:
 
         for m, count in daily_gap_closures.items():
             self.gap_closures_by_measure[m] = self.gap_closures_by_measure.get(m, 0) + count
-        for m, count in daily_total_patients.items():
-            # Set denominator once on first day, don't keep growing it
-            if m not in self.total_patients_by_measure or self.total_patients_by_measure[m] == 0:
-                self.total_patients_by_measure[m] = count
 
-        # Compute measure closure rates (cumulative closures / initial eligible population)
+        # Store baseline counts on first call
+        if n_initially_meeting and not self._n_initially_meeting:
+            self._n_initially_meeting = dict(n_initially_meeting)
+            self._n_total_patients = n_total_patients
+
+        # Compute HEDIS compliance rates: (baseline_meeting + newly_closed) / all_patients
         closure_rates = {}
         for m in HEDIS_MEASURES:
-            total = self.total_patients_by_measure.get(m, 0)
-            closed = self.gap_closures_by_measure.get(m, 0)
-            closure_rates[m] = min(closed / max(total, 1), 1.0)
+            n_already = self._n_initially_meeting.get(m, 0)
+            n_closed = self.gap_closures_by_measure.get(m, 0)
+            n_total = self._n_total_patients or daily_total_patients.get(m, 1)
+            closure_rates[m] = min((n_already + n_closed) / max(n_total, 1), 1.0)
 
         stars_score = compute_stars_score(closure_rates)
         measure_detail = get_measure_stars_detail(closure_rates)

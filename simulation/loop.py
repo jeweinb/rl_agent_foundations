@@ -233,6 +233,8 @@ def run_simulation(
             daily_actions=day_results["num_actions"],
             daily_gap_closures=day_results["gap_closures"],
             daily_total_patients=day_results["total_patients"],
+            n_initially_meeting=day_results.get("n_initially_meeting"),
+            n_total_patients=day_results.get("n_total_patients", 0),
             champion_score=night_results["champion_score"],
             challenger_score=night_results["challenger_score"],
             model_promoted=night_results["promoted"],

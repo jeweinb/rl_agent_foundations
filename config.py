@@ -389,11 +389,12 @@ CLOSURE_PROB_CAP = 0.70               # Maximum per-interaction closure probabil
 # Message Budget — GLOBAL shared pool across all patients
 # ---------------------------------------------------------------------------
 # The organization has a total message budget = AVG_MESSAGES_PER_PATIENT × cohort_size.
-# The agent decides how to ALLOCATE this pool — some patients may get 20+ messages
+# The agent decides how to ALLOCATE this pool — some patients may get 15+ messages
 # (high-value, responsive), others get 2 (unresponsive, already closed).
 # This creates a resource allocation problem: don't waste messages on patients
 # who won't respond; concentrate on high-value targets.
-AVG_MESSAGES_PER_PATIENT = 30         # Average messages per patient per quarter (150k total for 5k cohort)
+#
+AVG_MESSAGES_PER_PATIENT = 30         # Budget ceiling per patient per quarter (150k total for 5k cohort)
 BUDGET_WARNING_THRESHOLD = 0.25       # Warn when <25% of global budget remaining
 BUDGET_CRITICAL_THRESHOLD = 0.10      # Heavy penalty when <10% remaining
 
