@@ -151,11 +151,19 @@ wait_for_port() {
 
 # --- Commands ---
 
+clear_sim_data() {
+    info "Clearing simulation data and checkpoints..."
+    rm -rf data/simulation/* training/checkpoints/*
+    mkdir -p data/simulation training/checkpoints
+    ok "Simulation data cleared (cohort data preserved)"
+}
+
 cmd_stop() {
     header "Stopping all processes"
     kill_process "$DASHBOARD_PID" "Dashboard"
     kill_process "$SIMULATION_PID" "Simulation"
     kill_stale
+    clear_sim_data
     ok "All processes stopped"
 }
 
@@ -234,11 +242,6 @@ cmd_simulate() {
 
     # Stop existing simulation
     kill_process "$SIMULATION_PID" "existing Simulation"
-
-    # Clean previous simulation data
-    info "Clearing previous simulation data..."
-    rm -rf data/simulation/* training/checkpoints/*
-    mkdir -p data/simulation training/checkpoints
 
     info "Starting 90-day simulation..."
     python3 -u scripts/run_simulation.py \
