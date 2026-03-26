@@ -17,9 +17,30 @@ def create_layout():
                            config={"displayModeBar": False})]),
         ]),
 
+        # ── Simulation section header with night selector ──────────────────────
+        html.Div([
+            html.Div([
+                html.Span("Simulated Performance", style={
+                    "fontSize": "15px", "fontWeight": "700", "color": "#1e293b",
+                    "marginRight": "16px",
+                }),
+                html.Span("Slice by training night:", style={
+                    "fontSize": "13px", "color": "#64748b", "marginRight": "10px",
+                }),
+                dcc.Dropdown(
+                    id="sim-stars-day-select",
+                    style={"width": "180px", "display": "inline-block", "verticalAlign": "middle"},
+                    clearable=True,
+                    placeholder="Latest",
+                ),
+            ], style={"display": "flex", "alignItems": "center"}),
+        ], style={"marginBottom": "12px", "padding": "10px 16px",
+                  "background": "#f8fafc", "borderRadius": "8px",
+                  "border": "1px solid #e2e8f0"}),
+
         # Simulated next-day predictions from learned world
         card([
-            section_title("Simulated Performance (Learned World Predictions)",
+            section_title("Learned World Predictions",
                          "What the dynamics + reward models predict will happen if we deploy the current champion tomorrow"),
             html.Div(id="sim-performance-summary", style={"marginBottom": "16px"}),
         ], style={"flex": "none", "marginBottom": "16px"}),
@@ -45,7 +66,8 @@ def create_layout():
                          config={"displayModeBar": False}),
             ]),
             card([
-                section_title("Simulated STARS Projection"),
+                section_title("Simulated STARS Projection",
+                             "90-day STARS trajectory from this night's evaluation"),
                 dcc.Graph(id="sim-stars-projection", style={"height": "300px"},
                          config={"displayModeBar": False}),
             ]),

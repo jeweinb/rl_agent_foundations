@@ -139,13 +139,13 @@ def register_callbacks(app):
         metrics = load_cumulative_metrics()
 
         # STARS Gauge
-        stars_score = metrics[-1]["stars_score"] if metrics else 1.0
+        stars_score = round(float(metrics[-1]["stars_score"]) if metrics else 1.0, 2)
         gauge = go.Figure(go.Indicator(
             mode="gauge+number+delta",
             value=stars_score,
             title={"text": "Projected STARS Score", "font": {"size": 16, "color": NAVY}},
             delta={"reference": STARS_BONUS_THRESHOLD, "increasing": {"color": HUMANA_GREEN},
-                   "suffix": " to 4★", "valueformat": "+.2f"},
+                   "suffix": " to 4★", "valueformat": ".1f"},
             number={"valueformat": ".2f"},
             gauge={
                 "axis": {"range": [1, 5], "tickwidth": 2, "tickcolor": NAVY},
@@ -628,13 +628,7 @@ def register_callbacks(app):
     @app.callback(
         [Output("champion-challenger", "figure"),
          Output("model-version-timeline", "figure"),
-         Output("sim-performance-summary", "children"),
-         Output("sim-action-distribution", "figure"),
-         Output("sim-closure-predictions", "figure"),
-         Output("sim-channel-effectiveness", "figure"),
-         Output("sim-stars-projection", "figure"),
          Output("promotion-history-table", "children"),
-         Output("sim-action-breakdown", "children"),
          Output("debug-losses", "figure"),
          Output("debug-q-values", "figure"),
          Output("debug-entropy-alpha", "figure"),
@@ -674,131 +668,6 @@ def register_callbacks(app):
         else:
             mv_fig = _empty_fig("Model versions — waiting...")
 
-        # --- Simulation performance summary ---
-        if sim_preds:
-            latest = sim_preds[-1]
-            no_act_rate = latest.get("no_action_rate", 0)
-            mean_r = latest.get("mean_reward", 0)
-            total_acts = latest.get("total_actions", 0)
-            sim_summary = html.Div([
-                html.Div([
-                    html.Div([
-                        html.Span(f"{mean_r:.3f}", style={"fontSize": "24px", "fontWeight": "700", "color": NAVY}),
-                        html.Span(" predicted reward/episode", style={"fontSize": "13px", "color": GRAY_TEXT}),
-                    ], style={"marginRight": "40px"}),
-                    html.Div([
-                        html.Span(f"{no_act_rate:.0%}", style={"fontSize": "24px", "fontWeight": "700", "color": NAVY}),
-                        html.Span(" strategic silence rate", style={"fontSize": "13px", "color": GRAY_TEXT}),
-                    ], style={"marginRight": "40px"}),
-                    html.Div([
-                        html.Span(f"{total_acts:,}", style={"fontSize": "24px", "fontWeight": "700", "color": NAVY}),
-                        html.Span(f" simulated actions ({latest.get('n_episodes', 0)} episodes)", style={"fontSize": "13px", "color": GRAY_TEXT}),
-                    ]),
-                ], style={"display": "flex", "gap": "20px"}),
-            ])
-        else:
-            sim_summary = html.P("Simulation predictions will appear after first nightly training...",
-                               style={"color": GRAY_TEXT})
-
-        # --- Simulated action distribution by measure ---
-        if sim_preds:
-            latest = sim_preds[-1]
-            dist = latest.get("action_dist_by_measure", {})
-            if dist:
-                total_actions = sum(dist.values())
-                measures = sorted(dist.keys(), key=lambda m: dist[m], reverse=True)
-                pcts = [dist[m] / max(total_actions, 1) for m in measures]
-                hover = [f"{m} — {MEASURE_DESCRIPTIONS.get(m, m)}<br>{dist[m]:,} actions ({dist[m]/max(total_actions,1):.1%})" for m in measures]
-                act_dist = go.Figure(go.Bar(x=measures, y=pcts, marker_color=HUMANA_GREEN,
-                                            hovertext=hover, hoverinfo="text",
-                                            text=[f"{p:.0%}" for p in pcts], textposition="outside"))
-                _styled_fig(act_dist)
-                act_dist.update_layout(title="Predicted Action Mix by Measure (%)", yaxis_title="Share of Actions",
-                                      yaxis=dict(tickformat=".0%"))
-            else:
-                act_dist = _empty_fig("No action distribution data yet")
-        else:
-            act_dist = _empty_fig("Waiting for simulation predictions...")
-
-        # --- Simulated closure rates by measure ---
-        if sim_preds:
-            latest = sim_preds[-1]
-            closure_rates = latest.get("sim_closure_rates", {})
-            if closure_rates:
-                measures = sorted(closure_rates.keys())
-                rates = [closure_rates[m] for m in measures]
-                hover = [f"{m} — {MEASURE_DESCRIPTIONS.get(m, m)}<br>Rate: {r:.1%}" for m, r in zip(measures, rates)]
-                closure_fig = go.Figure(go.Bar(
-                    x=measures, y=rates,
-                    marker_color=[HUMANA_GREEN if r > 0.05 else "#94a3b8" for r in rates],
-                    hovertext=hover, hoverinfo="text",
-                    text=[f"{r:.1%}" for r in rates], textposition="outside",
-                ))
-                _styled_fig(closure_fig)
-                closure_fig.update_layout(title="Predicted Closure Rate by Measure",
-                                        yaxis_title="Closure Rate", yaxis=dict(tickformat=".0%"))
-            else:
-                closure_fig = _empty_fig("No closure predictions yet")
-        else:
-            closure_fig = _empty_fig("Waiting for simulation predictions...")
-
-        # --- Simulated channel effectiveness ---
-        if sim_preds:
-            latest = sim_preds[-1]
-            ch_rates = latest.get("sim_channel_rates", {})
-            if ch_rates:
-                channels = sorted(ch_rates.keys())
-                rates = [ch_rates[c] for c in channels]
-                ch_fig = go.Figure(go.Bar(
-                    x=[c.upper() for c in channels], y=rates,
-                    marker_color=NAVY,
-                    text=[f"{r:.1%}" for r in rates], textposition="outside",
-                ))
-                _styled_fig(ch_fig)
-                ch_fig.update_layout(title="Predicted Channel Effectiveness (Learned World)",
-                                   yaxis_title="Closure Rate per Action")
-            else:
-                ch_fig = _empty_fig("No channel data yet")
-        else:
-            ch_fig = _empty_fig("Waiting for simulation predictions...")
-
-        # --- Simulated STARS projection ---
-        # Show the latest 90-day trajectory from the most recent nightly simulation
-        if sim_preds and len(sim_preds) > 0:
-            latest_pred = sim_preds[-1]
-            trajectory = latest_pred.get("stars_trajectory", [])
-
-            stars_proj = go.Figure()
-
-            if trajectory:
-                traj_days = [t["day"] for t in trajectory]
-                traj_stars = [t["stars"] for t in trajectory]
-                stars_proj.add_trace(go.Scatter(
-                    x=traj_days, y=traj_stars, mode="lines+markers",
-                    name="Simulated STARS", line=dict(color=HUMANA_GREEN, width=3),
-                    marker=dict(size=6),
-                ))
-
-            # Also show final STARS from each past nightly run
-            all_finals = [(p["day"], p.get("final_stars", 1.0)) for p in sim_preds]
-            if len(all_finals) > 1:
-                stars_proj.add_trace(go.Scatter(
-                    x=[f[0] for f in all_finals], y=[f[1] for f in all_finals],
-                    mode="markers", name="Nightly Final STARS",
-                    marker=dict(size=10, color=NAVY, symbol="diamond"),
-                ))
-
-            stars_proj.add_hline(y=4.0, line_dash="dash", line_color="#ef4444",
-                               annotation_text="4★ Bonus")
-            _styled_fig(stars_proj)
-            stars_proj.update_layout(
-                title="Simulated 90-Day Quarter (Ground Truth World)",
-                xaxis_title="Simulation Day", yaxis_title="STARS Score",
-                yaxis=dict(range=[1, 5]),
-            )
-        else:
-            stars_proj = _empty_fig("STARS projection — waiting for data...")
-
         # --- Promotion history ---
         if metrics:
             rows = []
@@ -818,43 +687,6 @@ def register_callbacks(app):
             ], style={"width": "100%"})
         else:
             table = html.P("Waiting for training data...")
-
-        # --- Simulated action deployment breakdown ---
-        if sim_preds:
-            latest = sim_preds[-1]
-            # Build from the detailed eval data stored in sim_predictions
-            # We have action_dist_by_measure and action_dist_by_channel
-            dist_m = latest.get("action_dist_by_measure", {})
-            dist_c = latest.get("action_dist_by_channel", {})
-            if dist_m:
-                total_m = sum(dist_m.values())
-                total_c = sum(dist_c.values()) if dist_c else total_m
-                rows = []
-                for m in sorted(dist_m.keys(), key=lambda x: dist_m[x], reverse=True):
-                    m_full = MEASURE_DESCRIPTIONS.get(m, m)
-                    pct = dist_m[m] / max(total_m, 1)
-                    rows.append(html.Tr([
-                        html.Td(f"{m} — {m_full}", style={"fontSize": "11px"}),
-                        html.Td(f"{pct:.1%}"),
-                        html.Td(f"{dist_m[m]:,}", style={"color": GRAY_TEXT, "fontSize": "11px"}),
-                    ]))
-                if dist_c:
-                    rows.append(html.Tr([html.Td("", colSpan=3, style={"borderTop": f"2px solid {GRAY_BORDER}"})]))
-                    for ch in sorted(dist_c.keys(), key=lambda x: dist_c[x], reverse=True):
-                        pct = dist_c[ch] / max(total_c, 1)
-                        rows.append(html.Tr([
-                            html.Td(f"Channel: {ch.upper()}", style={"fontSize": "11px", "fontWeight": "600"}),
-                            html.Td(f"{pct:.1%}"),
-                            html.Td(f"{dist_c[ch]:,}", style={"color": GRAY_TEXT, "fontSize": "11px"}),
-                        ]))
-                sim_breakdown = html.Table([
-                    html.Thead(html.Tr([html.Th("Action / Channel"), html.Th("Share"), html.Th("Count")])),
-                    html.Tbody(rows),
-                ], style={"width": "100%", "fontSize": "12px"})
-            else:
-                sim_breakdown = html.P("No predicted breakdown yet", style={"color": GRAY_TEXT})
-        else:
-            sim_breakdown = html.P("Waiting for simulation predictions...", style={"color": GRAY_TEXT})
 
         # --- CQL Training Debug Charts ---
         from dashboard.data_feed import load_training_debug
@@ -923,10 +755,201 @@ def register_callbacks(app):
             ent_fig = _empty_fig("Entropy — waiting for data...")
             cql_fig = _empty_fig("CQL penalty — waiting for data...")
 
-        return cc_fig, mv_fig, sim_summary, act_dist, closure_fig, ch_fig, stars_proj, table, sim_breakdown, losses_fig, q_fig, ent_fig, cql_fig
+        return cc_fig, mv_fig, table, losses_fig, q_fig, ent_fig, cql_fig
 
     # =========================================================================
-    # Tab 3b: Per-Night Training Curve (drill-down)
+    # Tab 3b: Simulation section — all 5 outputs driven by night selector
+    # =========================================================================
+    @app.callback(
+        Output("sim-stars-day-select", "options"),
+        Input("interval-component", "n_intervals"),
+    )
+    def update_sim_stars_day_options(_):
+        from dashboard.data_feed import load_sim_predictions
+        sim_preds = load_sim_predictions()
+        if not sim_preds:
+            return []
+        return [{"label": f"Night {p['day']} (latest)" if i == len(sim_preds) - 1 else f"Night {p['day']}",
+                 "value": p["day"]}
+                for i, p in enumerate(sim_preds)]
+
+    def _pick_sim_pred(sim_preds, selected_day):
+        """Return the sim_pred for selected_day, or the latest if None/not found."""
+        if selected_day is not None:
+            pred = next((p for p in sim_preds if p.get("day") == selected_day), None)
+            if pred:
+                return pred
+        return sim_preds[-1]
+
+    @app.callback(
+        [Output("sim-performance-summary", "children"),
+         Output("sim-action-distribution", "figure"),
+         Output("sim-closure-predictions", "figure"),
+         Output("sim-channel-effectiveness", "figure"),
+         Output("sim-action-breakdown", "children")],
+        [Input("sim-stars-day-select", "value"),
+         Input("interval-component", "n_intervals")],
+    )
+    def update_sim_section(selected_day, _):
+        from dashboard.data_feed import load_sim_predictions
+        sim_preds = load_sim_predictions()
+        if not sim_preds:
+            empty = html.P("Simulation predictions will appear after first nightly training...", style={"color": GRAY_TEXT})
+            return empty, _empty_fig("Waiting..."), _empty_fig("Waiting..."), _empty_fig("Waiting..."), empty
+
+        pred = _pick_sim_pred(sim_preds, selected_day)
+        night_label = f"Night {pred.get('day', '?')}"
+
+        # --- Performance summary ---
+        no_act_rate = pred.get("no_action_rate", 0)
+        mean_r = pred.get("mean_reward", 0)
+        total_acts = pred.get("total_actions", 0)
+        sim_summary = html.Div([
+            html.Div([
+                html.Div([
+                    html.Span(f"{mean_r:.3f}", style={"fontSize": "24px", "fontWeight": "700", "color": NAVY}),
+                    html.Span(" predicted reward/episode", style={"fontSize": "13px", "color": GRAY_TEXT}),
+                ], style={"marginRight": "40px"}),
+                html.Div([
+                    html.Span(f"{no_act_rate:.0%}", style={"fontSize": "24px", "fontWeight": "700", "color": NAVY}),
+                    html.Span(" strategic silence rate", style={"fontSize": "13px", "color": GRAY_TEXT}),
+                ], style={"marginRight": "40px"}),
+                html.Div([
+                    html.Span(f"{total_acts:,}", style={"fontSize": "24px", "fontWeight": "700", "color": NAVY}),
+                    html.Span(f" simulated actions ({pred.get('n_episodes', 0)} episodes)", style={"fontSize": "13px", "color": GRAY_TEXT}),
+                ]),
+            ], style={"display": "flex", "gap": "20px"}),
+        ])
+
+        # --- Action distribution by measure ---
+        dist = pred.get("action_dist_by_measure", {})
+        if dist:
+            total_actions = sum(dist.values())
+            measures = sorted(dist.keys(), key=lambda m: dist[m], reverse=True)
+            pcts = [dist[m] / max(total_actions, 1) for m in measures]
+            hover = [f"{m} — {MEASURE_DESCRIPTIONS.get(m, m)}<br>{dist[m]:,} actions ({dist[m]/max(total_actions,1):.1%})" for m in measures]
+            act_dist = go.Figure(go.Bar(x=measures, y=pcts, marker_color=HUMANA_GREEN,
+                                        hovertext=hover, hoverinfo="text",
+                                        text=[f"{p:.0%}" for p in pcts], textposition="outside"))
+            _styled_fig(act_dist)
+            act_dist.update_layout(title=f"Action Mix by Measure — {night_label}", yaxis_title="Share",
+                                  yaxis=dict(tickformat=".0%"))
+        else:
+            act_dist = _empty_fig("No action distribution data yet")
+
+        # --- Closure rates by measure ---
+        closure_rates = pred.get("sim_closure_rates", {})
+        if closure_rates:
+            measures = sorted(closure_rates.keys())
+            rates = [closure_rates[m] for m in measures]
+            hover = [f"{m} — {MEASURE_DESCRIPTIONS.get(m, m)}<br>Rate: {r:.1%}" for m, r in zip(measures, rates)]
+            closure_fig = go.Figure(go.Bar(
+                x=measures, y=rates,
+                marker_color=[HUMANA_GREEN if r > 0.05 else "#94a3b8" for r in rates],
+                hovertext=hover, hoverinfo="text",
+                text=[f"{r:.1%}" for r in rates], textposition="outside",
+            ))
+            _styled_fig(closure_fig)
+            closure_fig.update_layout(title=f"Closure Rate by Measure — {night_label}",
+                                    yaxis_title="Closure Rate", yaxis=dict(tickformat=".0%"))
+        else:
+            closure_fig = _empty_fig("No closure predictions yet")
+
+        # --- Channel effectiveness ---
+        ch_rates = pred.get("sim_channel_rates", {})
+        if ch_rates:
+            channels = sorted(ch_rates.keys())
+            rates = [ch_rates[c] for c in channels]
+            ch_fig = go.Figure(go.Bar(
+                x=[c.upper() for c in channels], y=rates,
+                marker_color=NAVY,
+                text=[f"{r:.1%}" for r in rates], textposition="outside",
+            ))
+            _styled_fig(ch_fig)
+            ch_fig.update_layout(title=f"Channel Effectiveness — {night_label}",
+                               yaxis_title="Closure Rate per Action")
+        else:
+            ch_fig = _empty_fig("No channel data yet")
+
+        # --- Action deployment breakdown ---
+        dist_m = pred.get("action_dist_by_measure", {})
+        dist_c = pred.get("action_dist_by_channel", {})
+        if dist_m:
+            total_m = sum(dist_m.values())
+            total_c = sum(dist_c.values()) if dist_c else total_m
+            rows = []
+            for m in sorted(dist_m.keys(), key=lambda x: dist_m[x], reverse=True):
+                m_full = MEASURE_DESCRIPTIONS.get(m, m)
+                pct = dist_m[m] / max(total_m, 1)
+                rows.append(html.Tr([
+                    html.Td(f"{m} — {m_full}", style={"fontSize": "11px"}),
+                    html.Td(f"{pct:.1%}"),
+                    html.Td(f"{dist_m[m]:,}", style={"color": GRAY_TEXT, "fontSize": "11px"}),
+                ]))
+            if dist_c:
+                rows.append(html.Tr([html.Td("", colSpan=3, style={"borderTop": f"2px solid {GRAY_BORDER}"})]))
+                for ch in sorted(dist_c.keys(), key=lambda x: dist_c[x], reverse=True):
+                    pct = dist_c[ch] / max(total_c, 1)
+                    rows.append(html.Tr([
+                        html.Td(f"Channel: {ch.upper()}", style={"fontSize": "11px", "fontWeight": "600"}),
+                        html.Td(f"{pct:.1%}"),
+                        html.Td(f"{dist_c[ch]:,}", style={"color": GRAY_TEXT, "fontSize": "11px"}),
+                    ]))
+            sim_breakdown = html.Table([
+                html.Thead(html.Tr([html.Th("Action / Channel"), html.Th("Share"), html.Th("Count")])),
+                html.Tbody(rows),
+            ], style={"width": "100%", "fontSize": "12px"})
+        else:
+            sim_breakdown = html.P("No predicted breakdown yet", style={"color": GRAY_TEXT})
+
+        return sim_summary, act_dist, closure_fig, ch_fig, sim_breakdown
+
+    @app.callback(
+        Output("sim-stars-projection", "figure"),
+        [Input("sim-stars-day-select", "value"),
+         Input("interval-component", "n_intervals")],
+    )
+    def update_sim_stars_projection(selected_day, _):
+        from dashboard.data_feed import load_sim_predictions
+        sim_preds = load_sim_predictions()
+        if not sim_preds:
+            return _empty_fig("STARS projection — waiting for data...")
+
+        pred = _pick_sim_pred(sim_preds, selected_day)
+        trajectory = pred.get("stars_trajectory", [])
+        training_day = pred.get("day", "?")
+        fig = go.Figure()
+
+        if trajectory:
+            traj_days = [t["day"] for t in trajectory]
+            traj_stars = [t["stars"] for t in trajectory]
+            fig.add_trace(go.Scatter(
+                x=traj_days, y=traj_stars, mode="lines+markers",
+                name=f"Night {training_day} Trajectory",
+                line=dict(color=HUMANA_GREEN, width=3),
+                marker=dict(size=6),
+            ))
+            # Single diamond for this night's final STARS
+            final_stars = traj_stars[-1]
+            fig.add_trace(go.Scatter(
+                x=[traj_days[-1]], y=[final_stars], mode="markers",
+                name=f"Night {training_day} Final",
+                marker=dict(symbol="diamond", size=12, color=NAVY,
+                            line=dict(color="white", width=1)),
+                text=[f"Night {training_day}: {final_stars:.2f}"], hoverinfo="text",
+            ))
+
+        fig.add_hline(y=4.0, line_dash="dash", line_color="#ef4444", annotation_text="4★ Bonus")
+        _styled_fig(fig)
+        fig.update_layout(
+            title=f"Simulated 90-Day STARS — Night {training_day}",
+            xaxis_title="Simulation Day", yaxis_title="STARS Score",
+            yaxis=dict(range=[1, 5]),
+        )
+        return fig
+
+    # =========================================================================
+    # Tab 3c: Per-Night Training Curve (drill-down)
     # =========================================================================
     @app.callback(
         Output("debug-day-selector", "options"),
@@ -1433,10 +1456,13 @@ def register_callbacks(app):
             fig = _empty_fig("Action Flow Sankey — waiting for data...")
             return fig
 
-        # Count transitions between states
+        # Count transitions between states — only include completed (terminal) lifecycles
+        # so in-flight PRESENTED/VIEWED actions don't create dead-end nodes
         from collections import defaultdict
         transition_counts = defaultdict(int)
         for record in sm_data:
+            if not record.get("terminal", False):
+                continue  # skip actions still in progress
             history = record.get("state_history", [])
             for i in range(len(history) - 1):
                 src = history[i]["state"]

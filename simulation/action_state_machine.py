@@ -209,9 +209,12 @@ class ActionLifecycleTracker:
             prob = min(base * (0.5 + ch_affinity), 0.98)
             next_state = ActionState.VIEWED if self.rng.random() < prob else ActionState.EXPIRED
         elif current == ActionState.VIEWED:
-            # Acceptance: driven by engagement level + variant match + responsiveness
+            # Acceptance: base rate × engagement ratio × responsiveness ratio × variant boost
+            # At average (ch_engagement=0.2, responsiveness=0.5), result equals the base rate.
             base = base_probs.get("VIEWED→ACCEPTED", 0.3)
-            prob = min(base * (0.3 + ch_engagement) * responsiveness * variant_boost, 0.90)
+            engagement_factor = ch_engagement / 0.2   # 1.0 at average engagement
+            responsiveness_factor = responsiveness / 0.5  # 1.0 at average responsiveness
+            prob = min(base * engagement_factor * responsiveness_factor * variant_boost, 0.90)
             next_state = ActionState.ACCEPTED if self.rng.random() < prob else ActionState.DECLINED
         elif current == ActionState.ACCEPTED:
             # Completion: driven by overall responsiveness

@@ -19,7 +19,7 @@ from typing import Dict, Any, List, Optional
 
 from config import (
     SIMULATION_DATA_DIR, CHECKPOINTS_DIR, STATE_DIM, NUM_ACTIONS,
-    GENERATED_DATA_DIR,
+    GENERATED_DATA_DIR, CQL_CONFIG,
 )
 from training.data_loader import load_datasets, build_offline_episodes
 from training.cql_trainer import train_cql, ActorCriticCQL
@@ -176,6 +176,36 @@ def run_nightly_cycle(
     from simulation.logger import get_logger
     log = get_logger()
 
+    # DEBUG: Batch data diagnostics — verify training signal quality
+    try:
+        import torch as _t
+        import numpy as _np
+        if training_episodes:
+            all_obs = _np.concatenate([ep["obs"] for ep in training_episodes if len(ep["obs"]) > 0])
+            all_rews = _np.concatenate([ep["rewards"] for ep in training_episodes if len(ep["rewards"]) > 0])
+            all_acts = _np.concatenate([ep["actions"] for ep in training_episodes if len(ep["actions"]) > 0])
+            from config import TIER1_END, TIER2_END, TIER3_END, NUM_ACTIONS
+            log.debug(
+                f"[Day {day}] Batch diagnostics",
+                n_episodes=len(training_episodes),
+                n_transitions=int(total_transitions),
+                state_shape=list(all_obs.shape),
+                state_tier1_mean=round(float(all_obs[:, :TIER1_END].mean()), 4),
+                state_tier2_mean=round(float(all_obs[:, TIER1_END:TIER2_END].mean()), 4),
+                state_tier3_mean=round(float(all_obs[:, TIER2_END:].mean()), 4),
+                state_has_nan=bool(_np.isnan(all_obs).any()),
+                state_has_inf=bool(_np.isinf(all_obs).any()),
+                reward_mean=round(float(all_rews.mean()), 4),
+                reward_std=round(float(all_rews.std()), 4),
+                reward_max=round(float(all_rews.max()), 4),
+                reward_pct_positive=round(float((all_rews > 0).mean()), 4),
+                reward_pct_zero=round(float((all_rews == 0).mean()), 4),
+                action_unique=int(_np.unique(all_acts).shape[0]),
+                action_no_action_pct=round(float((all_acts == 0).mean()), 4),
+            )
+    except Exception as _e:
+        log.warn(f"[Day {day}] Batch diagnostics failed: {_e}")
+
     try:
         import torch
 
@@ -211,9 +241,9 @@ def run_nightly_cycle(
                 states = torch.FloatTensor(ep["obs"])
                 actions = torch.LongTensor(ep["actions"])
                 rewards = torch.FloatTensor(ep["rewards"])
-                # Binary labels matching initial training distribution (0 = no closure, 1 = closure)
-                # Use sample weights to preserve measure importance signal
-                labels = (rewards > 0.1).float()
+                # Continuous labels: normalize by max reward (3.05 = weight-3 closure + 0.05 click)
+                # This preserves measure weight signal: BCS(3.0) >> FLU(1.0) >> no-closure(0.0)
+                labels = (rewards / 3.05).clamp(0, 1)
                 # Weight high-reward closures more: weight-3 measures get 3x gradient
                 sample_weights = torch.where(rewards > 0.5, rewards / rewards.max().clamp(min=1.0), torch.ones_like(rewards))
                 # Use actual simulation day for time-aware reward prediction
@@ -241,7 +271,7 @@ def run_nightly_cycle(
                 episodes=training_episodes,
                 agent=challenger,
                 epochs=cql_epochs,
-                batch_size=1024,
+                batch_size=CQL_CONFIG["batch_size"],
                 verbose=False,
             )
     except Exception as e:
@@ -279,6 +309,19 @@ def run_nightly_cycle(
               f"Challenger: {comparison['challenger_mean_reward']:.4f} | "
               f"{'PROMOTE' if comparison['promote_challenger'] else 'retain'}", flush=True)
 
+    # DEBUG: log eval comparison details
+    log.debug(
+        f"[Day {day}] Eval comparison",
+        champion_reward=round(comparison.get("champion_mean_reward", 0), 4),
+        challenger_reward=round(comparison.get("challenger_mean_reward", 0), 4),
+        relative_improvement=round(comparison.get("relative_improvement", 0), 4),
+        promote=comparison.get("promote_challenger", False),
+        champion_gaps=round(comparison.get("champion_gaps_closed", 0), 4),
+        challenger_gaps=round(comparison.get("challenger_gaps_closed", 0), 4),
+        champion_no_action_rate=round(champion_metrics.get("no_action_rate", 0), 4),
+        challenger_no_action_rate=round(challenger_metrics.get("no_action_rate", 0), 4),
+    )
+
     # Save challenger checkpoint
     challenger_path = os.path.join(CHECKPOINTS_DIR, f"challenger_day_{day:02d}.pt")
     torch.save(challenger.state_dict(), challenger_path)
@@ -304,12 +347,29 @@ def run_nightly_cycle(
             reward_model=reward_model,
         )
     except Exception as e:
+        import traceback as _tb
         log.error(f"Detailed evaluation failed: {e}")
+        log.debug(f"[Day {day}] Detailed eval traceback: {_tb.format_exc()}")
         sim_detail = {"mean_reward": 0.0, "std_reward": 0.0, "total_actions": 0,
                       "no_action_count": 0, "no_action_rate": 0.0,
                       "sim_closure_rates": {}, "sim_channel_rates": {},
                       "action_dist_by_measure": {}, "action_dist_by_channel": {},
                       "n_episodes": 0}
+    else:
+        # DEBUG: log detailed simulation results
+        closure_rates = sim_detail.get("sim_closure_rates", {})
+        top_measures = sorted(closure_rates.items(), key=lambda x: -x[1])[:5]
+        log.debug(
+            f"[Day {day}] Detailed sim results",
+            mean_reward=round(sim_detail.get("mean_reward", 0), 4),
+            final_stars=round(sim_detail.get("final_stars", 0), 4),
+            total_actions=sim_detail.get("total_actions", 0),
+            no_action_rate=round(sim_detail.get("no_action_rate", 0), 4),
+            avg_closure_rate=round(sum(closure_rates.values()) / max(len(closure_rates), 1), 4),
+            top_5_closures={m: round(r, 3) for m, r in top_measures},
+            channel_rates={ch: round(r, 3) for ch, r in sim_detail.get("sim_channel_rates", {}).items()},
+            stars_trajectory_len=len(sim_detail.get("stars_trajectory", [])),
+        )
 
     # Save nightly metrics + simulation predictions
     day_dir = os.path.join(SIMULATION_DATA_DIR, f"day_{day:02d}")

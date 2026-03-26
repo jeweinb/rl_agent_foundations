@@ -2,11 +2,16 @@
 State space definition and feature vector construction.
 
 3-TIER FEATURE ARCHITECTURE:
-  Tier 1 — Patient State (50):  Who is this patient?
+  Tier 1 — Patient State (86):  Who is this patient?
+    Demographics(6) + Clinical(6) + Conditions(8) + Medications(4)
+    + Gap flags(18) + Risk scores(4) + Channel availability(4) + Measure clinical(36)
   Tier 2 — System State (20):   What's the state of the program?
-  Tier 3 — Action Context (58): What's been tried for THIS patient?
+    Budget(6) + Temporal(3) + Population(2) + STARS progress(4) + Cohort channels(5)
+  Tier 3 — Action Context (70): What's been tried for THIS patient?
+    Contact history(8) + Channel success(5) + Engagement(5) + Gap context(5)
+    + Pending actions(3) + Action history(10) + Gap detail(10) + Measure attempts(24)
 
-Total: 128 features.
+Total: 176 features.  (indices 0-175; see config.py TIER1_END/TIER2_END/TIER3_END)
 """
 import numpy as np
 from typing import Dict, Any, List, Optional

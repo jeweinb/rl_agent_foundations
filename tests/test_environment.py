@@ -107,7 +107,12 @@ class TestStateSpace:
                 assert val in (0.0, 1.0), f"Gap flag at idx {gap_start_idx + i} = {val}"
 
     def test_action_history_encoding(self, small_snapshots):
-        vec = snapshot_to_vector(small_snapshots[0], action_history=[1, 5, 10])
+        # action_history replaced by channel_affinity_counts/recency in Tier 3
+        vec = snapshot_to_vector(
+            small_snapshots[0],
+            channel_affinity_counts={"sms": 3, "email": 1, "portal": 0, "app": 0, "ivr": 2},
+            channel_affinity_recency={"sms": 5, "email": 10, "portal": 90, "app": 90, "ivr": 3},
+        )
         assert vec.shape == (STATE_DIM,)
 
     def test_day_of_year_encoding(self, small_snapshots):

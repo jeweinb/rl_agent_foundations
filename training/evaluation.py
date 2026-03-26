@@ -213,34 +213,39 @@ def evaluate_agent_detailed(
         # Snapshot STARS every 5 days
         if day % 5 == 0 or day == sim_days:
             gap_closures = day_summary.get("gap_closures", {})
-            total_patients = day_summary.get("total_patients", {})
 
-            # Compute cumulative closure rates from the world's metrics tracker
-            # Use the world's own gap closure accumulation
-            closure_rates = {}
+            # Compute HEDIS compliance rates (not gap-closure fractions).
+            # CMS cut points expect: patients meeting measure / all eligible patients.
+            # Patients without the measure in initial open_gaps were already meeting it
+            # (or ineligible — we treat them as meeting for denominator purposes).
+            n_total = len(world.patients)
+            hedis_rates = {}
             for m in HEDIS_MEASURES:
-                # Denominator: initial patients with this gap
-                denom = sum(1 for ps in world.patients.values() if m in ps.snapshot.get("open_gaps", []) or m in ps.snapshot.get("closed_gaps", []))
-                # Numerator: patients who have responded (closure day set)
-                closed = sum(1 for ps in world.patients.values() if m in getattr(ps, 'closed_measures', set()) and m in ps.snapshot.get("open_gaps", []))
-                closure_rates[m] = closed / max(denom, 1)
+                n_initial_open = sum(1 for ps in world.patients.values()
+                                     if m in ps.snapshot.get("open_gaps", []))
+                n_already_meeting = n_total - n_initial_open
+                n_closed = sum(1 for ps in world.patients.values()
+                               if m in getattr(ps, 'closed_measures', set()))
+                hedis_rates[m] = (n_already_meeting + n_closed) / max(n_total, 1)
 
-            stars = compute_stars_score(closure_rates)
+            stars = compute_stars_score(hedis_rates)
             stars_trajectory.append({
                 "day": day,
                 "stars": stars,
-                "avg_closure": sum(closure_rates.values()) / max(len(closure_rates), 1),
+                "avg_closure": sum(hedis_rates.values()) / max(len(hedis_rates), 1),
                 "daily_actions": daily_actions_count,
                 "daily_closures": sum(gap_closures.values()),
                 "budget_remaining": world.budget_remaining,
             })
 
-    # Final closure rates
+    # Final HEDIS compliance rates (full population, not just gap-opener fraction)
+    n_total = len(world.patients)
     sim_closure_rates = {}
     for m in HEDIS_MEASURES:
-        denom = sum(1 for ps in world.patients.values() if m in ps.snapshot.get("open_gaps", []) or m in ps.snapshot.get("closed_gaps", []))
-        closed = sum(1 for ps in world.patients.values() if ps.last_closure_day > 0 and m in ps.snapshot.get("open_gaps", []))
-        sim_closure_rates[m] = closed / max(denom, 1)
+        n_initial_open = sum(1 for ps in world.patients.values() if m in ps.snapshot.get("open_gaps", []))
+        n_already_meeting = n_total - n_initial_open
+        n_closed = sum(1 for ps in world.patients.values() if m in getattr(ps, 'closed_measures', set()))
+        sim_closure_rates[m] = (n_already_meeting + n_closed) / max(n_total, 1)
 
     sim_channel_rates = {}
     for ch in ["sms", "email", "portal", "app", "ivr"]:

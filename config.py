@@ -358,32 +358,32 @@ OUTREACH_LIFT: Dict[str, float] = {
 # fills Rx at pharmacy, gets vaccine on their own, etc.
 # Must be MUCH lower than action-driven rates so the model learns incremental lift.
 ORGANIC_CLOSURE_DAILY_RATE: Dict[str, float] = {
-    "COL": 0.001,   # ~3% over 30 days — low, colonoscopy rarely happens spontaneously
-    "BCS": 0.002,   # ~6% over 30 days — some women schedule mammograms on their own
-    "EED": 0.001,   # ~3% — eye exams rarely self-initiated by diabetics
-    "FVA": 0.002,   # ~6% — some get Tdap at routine visits
-    "FVO": 0.002,   # ~6% — pneumococcal offered at routine visits
-    "AIS": 0.001,   # ~3% — Shingrix less commonly self-initiated
-    "FLU": 0.005,   # ~14% — flu shots highly visible at pharmacies in season
-    "CBP": 0.003,   # ~9% — BP checked at any doctor visit
-    "BPD": 0.002,   # ~6% — requires diabetes + hypertension visit
-    "HBD": 0.002,   # ~6% — A1C drawn at routine diabetes visits
-    "KED": 0.001,   # ~3% — kidney labs rarely ordered without prompting
-    "MAC": 0.004,   # ~11% — statin refills happen at pharmacy
-    "MRA": 0.004,   # ~11% — ACE/ARB refills happen at pharmacy
-    "MDS": 0.003,   # ~9% — diabetes statin refills
-    "DSF": 0.001,   # ~3% — depression follow-up rarely self-initiated
-    "DRR": 0.0005,  # ~1.5% — remission is hard without intervention
-    "DMC02": 0.003, # ~9% — antidepressant refills at pharmacy
-    "TRC_M": 0.002, # ~6% — some patients schedule post-discharge follow-up
+    "COL": 0.003,   # ~8% over 30 days — some schedule colonoscopy on their own
+    "BCS": 0.005,   # ~14% over 30 days — mammograms relatively common self-schedule
+    "EED": 0.003,   # ~8% — some diabetics get eye exams at routine visits
+    "FVA": 0.004,   # ~11% — Tdap offered at routine visits
+    "FVO": 0.005,   # ~14% — pneumococcal offered at routine PCP visits
+    "AIS": 0.003,   # ~8% — Shingrix offered at pharmacy visits
+    "FLU": 0.010,   # ~26% — flu shots highly visible at pharmacies in season
+    "CBP": 0.006,   # ~17% — BP checked at any doctor visit
+    "BPD": 0.005,   # ~14% — checked at diabetes + hypertension visits
+    "HBD": 0.005,   # ~14% — A1C drawn at routine diabetes visits
+    "KED": 0.003,   # ~8% — kidney labs sometimes ordered at routine
+    "MAC": 0.008,   # ~21% — statin refills happen at pharmacy naturally
+    "MRA": 0.008,   # ~21% — ACE/ARB refills happen at pharmacy naturally
+    "MDS": 0.007,   # ~19% — diabetes statin refills
+    "DSF": 0.003,   # ~8% — some follow up on their own
+    "DRR": 0.002,   # ~6% — remission still hard without intervention
+    "DMC02": 0.006, # ~17% — antidepressant refills at pharmacy
+    "TRC_M": 0.004, # ~11% — some patients schedule post-discharge follow-up
 }
 
-CLOSURE_BASE_MULTIPLIER = 0.30        # base_rate * this * archetype factors = per-interaction closure prob
+CLOSURE_BASE_MULTIPLIER = 0.80        # base_rate * this * archetype factors = per-interaction closure prob
 CLOSURE_BEST_CHANNEL_FACTOR = 2.5     # Multiplied when using best channel for measure
 CLOSURE_CLICKED_FACTOR = 3.0          # Multiplied if patient clicked
 CLOSURE_OPENED_FACTOR = 1.5           # Multiplied if patient opened/viewed
-CLOSURE_DELIVERED_FACTOR = 1.1        # Multiplied if delivered
-CLOSURE_PROB_CAP = 0.5                # Maximum per-interaction closure probability
+CLOSURE_DELIVERED_FACTOR = 1.2        # Multiplied if delivered
+CLOSURE_PROB_CAP = 0.70               # Maximum per-interaction closure probability
 
 # ---------------------------------------------------------------------------
 # Message Budget — GLOBAL shared pool across all patients
@@ -421,6 +421,7 @@ CQL_CONFIG = {
     "bc_iters": 5,
     "cql_iters": 20,
     "lr": 1e-4,              # Lower LR for stable incremental learning
+    "batch_size": 1024,      # Transitions per gradient step
 }
 
 # ---------------------------------------------------------------------------
@@ -429,12 +430,12 @@ CQL_CONFIG = {
 # Lag distributions (days between action and gap closure observation).
 # Shorter lags so results are visible within the first 2-3 weeks of simulation.
 LAG_DISTRIBUTIONS = {
-    "screenings": {"min": 2, "max": 10, "mean": 5},
-    "vaccines": {"min": 1, "max": 5, "mean": 2},
-    "chronic": {"min": 2, "max": 8, "mean": 4},
-    "medication_adherence": {"min": 3, "max": 12, "mean": 6},
-    "mental_health": {"min": 2, "max": 10, "mean": 5},
-    "care_coordination": {"min": 1, "max": 5, "mean": 3},
+    "screenings": {"min": 1, "max": 5, "mean": 3},
+    "vaccines": {"min": 1, "max": 3, "mean": 1},
+    "chronic": {"min": 1, "max": 5, "mean": 2},
+    "medication_adherence": {"min": 1, "max": 5, "mean": 3},
+    "mental_health": {"min": 1, "max": 5, "mean": 3},
+    "care_coordination": {"min": 1, "max": 3, "mean": 2},
 }
 
 # ---------------------------------------------------------------------------

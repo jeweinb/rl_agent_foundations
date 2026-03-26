@@ -231,6 +231,12 @@ class ActorCriticCQL:
             "cql_penalty": (cql_q1.item() + cql_q2.item()) / 2,
             "cql_alpha": self.log_cql_alpha.exp().item() if self.use_lagrangian else self.min_q_weight,
             "critic_loss": critic_loss.item(),
+            # Q-value diagnostics: detect explosion/collapse
+            "q_mean": q1_selected.mean().item(),
+            "q_min": q1_selected.min().item(),
+            "q_max": q1_selected.max().item(),
+            "td_target_mean": td_target.mean().item(),
+            "td_target_std": td_target.std().item(),
         }
 
     def update_actor(self, obs, masks):
@@ -435,9 +441,14 @@ def train_cql(
         total_actor_loss = 0.0
         total_td_loss = 0.0
         total_cql = 0.0
+        total_q_mean = 0.0
+        total_q_min = 0.0
+        total_q_max = 0.0
+        total_td_target_mean = 0.0
         n_batches = 0
         last_alpha = 0.0
         last_entropy = 0.0
+        last_cql_alpha = 0.0
 
         for batch in dataloader:
             obs_b, act_b, rew_b, next_obs_b, done_b, mask_b, next_mask_b = batch
@@ -451,8 +462,13 @@ def train_cql(
             total_td_loss += critic_info["td_loss"]
             total_actor_loss += actor_info["actor_loss"]
             total_cql += critic_info["cql_penalty"]
+            total_q_mean += critic_info.get("q_mean", 0.0)
+            total_q_min += critic_info.get("q_min", 0.0)
+            total_q_max += critic_info.get("q_max", 0.0)
+            total_td_target_mean += critic_info.get("td_target_mean", 0.0)
             last_alpha = alpha_info["alpha"]
             last_entropy = alpha_info["entropy"]
+            last_cql_alpha = critic_info.get("cql_alpha", agent.min_q_weight)
             n_batches += 1
             global_step += 1
 
@@ -466,6 +482,9 @@ def train_cql(
                     "cql": critic_info["cql_penalty"],
                     "alpha": last_alpha,
                     "entropy": last_entropy,
+                    "q_mean": critic_info.get("q_mean", 0.0),
+                    "q_min": critic_info.get("q_min", 0.0),
+                    "q_max": critic_info.get("q_max", 0.0),
                 })
 
         epoch_metrics = {
@@ -474,16 +493,25 @@ def train_cql(
             "td_loss": total_td_loss / max(n_batches, 1),
             "actor_loss": total_actor_loss / max(n_batches, 1),
             "cql_penalty": total_cql / max(n_batches, 1),
+            "q_mean": total_q_mean / max(n_batches, 1),
+            "q_min": total_q_min / max(n_batches, 1),
+            "q_max": total_q_max / max(n_batches, 1),
+            "td_target_mean": total_td_target_mean / max(n_batches, 1),
             "alpha": last_alpha,
             "entropy": last_entropy,
+            "cql_alpha": last_cql_alpha,
         }
         training_history.append(epoch_metrics)
 
-        if verbose and (epoch + 1) % 10 == 0:
-            print(f"  Epoch {epoch + 1}/{epochs} — critic: {epoch_metrics['critic_loss']:.4f}, "
+        if verbose and (epoch + 1) % 5 == 0:
+            print(f"  Epoch {epoch + 1}/{epochs} — "
+                  f"critic: {epoch_metrics['critic_loss']:.4f}, "
+                  f"td: {epoch_metrics['td_loss']:.4f}, "
                   f"actor: {epoch_metrics['actor_loss']:.4f}, "
-                  f"cql: {epoch_metrics['cql_penalty']:.4f}, "
-                  f"alpha: {last_alpha:.4f}, entropy: {last_entropy:.2f}")
+                  f"cql: {epoch_metrics['cql_penalty']:.4f} (α={last_cql_alpha:.3f}), "
+                  f"Q[mean={epoch_metrics['q_mean']:.2f} min={epoch_metrics['q_min']:.2f} max={epoch_metrics['q_max']:.2f}], "
+                  f"target_mean={epoch_metrics['td_target_mean']:.2f}, "
+                  f"entropy={last_entropy:.2f}")
 
     if verbose:
         print("CQL-SAC training complete.")

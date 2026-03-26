@@ -68,7 +68,7 @@ class SimulationLogger:
         except Exception:
             pass  # Don't crash on log write failure
         # Write to stdout with flush
-        prefix = {"INFO": "  ", "PHASE": ">>", "METRIC": "**", "ERROR": "!!", "WARN": "⚠️"}
+        prefix = {"INFO": "  ", "PHASE": ">>", "METRIC": "**", "ERROR": "!!", "WARN": "⚠️ ", "DEBUG": " ~"}
         print(f"{prefix.get(level, '  ')} [{level}] {message}", flush=True)
 
     def info(self, message: str, **kwargs):
@@ -82,6 +82,9 @@ class SimulationLogger:
 
     def warn(self, message: str, **kwargs):
         self.log("WARN", message, **kwargs)
+
+    def debug(self, message: str, **kwargs):
+        self.log("DEBUG", message, **kwargs)
 
     def error(self, message: str, **kwargs):
         self.log("ERROR", message, **kwargs)
